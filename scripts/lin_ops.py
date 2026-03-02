@@ -42,7 +42,7 @@ def compute_pseudospectrum(A, grid_dim=100, max_iter=100):
   R, C =  np.meshgrid(r, c)
   zz = R+C
   sigmin = np.zeros((grid_dim, grid_dim))
-  trtrs, = scipy.linalg.get_lapack_funcs(('trtrs',), (_worker_T,))
+  trtrs, = scipy.linalg.get_lapack_funcs(('trtrs',), (T,))
   print('Computing pseudospectrum', flush=True)
   for i in range(grid_dim):
     for j in range(grid_dim):
@@ -63,32 +63,44 @@ def compute_pseudospectrum(A, grid_dim=100, max_iter=100):
   return R, C, sigmin
 
 if __name__=="__main__":
-  # Get jacobian and mass matrices from files
-  Mmat = Matrix('/ocean/projects/phy240045p/freiberg/pseudospectra/harris_linear/mass_mat.h5', '/massmat')
-  Jac = Matrix('/ocean/projects/phy240045p/freiberg/pseudospectra/harris_linear/lin_ops.h5', '/jacobian')
-  Mmat = Mmat.csr_rep.todense()
-  nr_block=Mmat.shape[0]
-  Mmat_big = scipy.linalg.block_diag(Mmat,Mmat,Mmat,Mmat,Mmat,Mmat,Mmat)
-  del Mmat  
-  # Convert Jacobian to dense, then to global matrix form, 
-  # then solve the generalized eigenvalue problem
-  dense_Jac = Jac.csr_rep.todense()
-  print(f'Shape of local jacobian is: {dense_Jac.shape}', flush=True)
-  print(f'Shape of global jacobian is: ({Jac.nrg}, {Jac.ncg})', flush=True)
-  jac_gl = make_global_mat(dense_Jac, Jac.nrg, Jac.ncg, Jac.lg) # Generate global jacobian matrix
-  mmat_gl = make_global_mat(Mmat_big, Jac.nrg, Jac.ncg, Jac.lg) # Generate global mass matrix
-  del Jac, dense_Jac, Mmat_big
-  print('Computing real jacobian matrix', flush=True)
-  real_Jac = np.linalg.lstsq(jac_gl, mmat_gl) # invert global mass matrix and multiply by global jacobian to get real jacobian
-  print('Computing eigenvalues', flush=True)
-  w, v = sparse.linalg.eigs(real_Jac, k=10, sigma=1.0, tol=1e-6)
-
-
-  # np.save('full/partial_eigs.npy', w)
-  # print(w, flush=True)
-  # plt.scatter(w.real, w.imag)
-  # plt.savefig('full/partial_spectrum.png')
+  # try to load real jacobian from file, if it doesn't exist, compute it and save to file
+  try:
+    real_Jac = np.load('real_jacobian.npy')
+  except FileNotFoundError:
+    # Get jacobian and mass matrices from files
+    Mmat = Matrix('/ocean/projects/phy240045p/freiberg/pseudospectra/harris_linear/mass_mat.h5', '/massmat')
+    Jac = Matrix('/ocean/projects/phy240045p/freiberg/pseudospectra/harris_linear/lin_ops.h5', '/jacobian')
+    Mmat = Mmat.csr_rep.todense()
+    nr_block=Mmat.shape[0]
+    Mmat_big = scipy.linalg.block_diag(Mmat,Mmat,Mmat,Mmat,Mmat,Mmat,Mmat)
+    del Mmat  
+    # Convert Jacobian to dense, then to global matrix form, 
+    # then solve the generalized eigenvalue problem
+    dense_Jac = Jac.csr_rep.todense()
+    print(f'Shape of local jacobian is: {dense_Jac.shape}', flush=True)
+    print(f'Shape of global jacobian is: ({Jac.nrg}, {Jac.ncg})', flush=True)
+    jac_gl = make_global_mat(dense_Jac, Jac.nrg, Jac.ncg, Jac.lg) # Generate global jacobian matrix
+    mmat_gl = make_global_mat(Mmat_big, Jac.nrg, Jac.ncg, Jac.lg) # Generate global mass matrix
+    del Jac, dense_Jac, Mmat_big
+    print('Computing real jacobian matrix', flush=True)
+    result = np.linalg.lstsq(jac_gl, mmat_gl) # invert global mass matrix and multiply by global jacobian to get real jacobian
+    real_Jac = result[0]
+    np.save('real_jacobian.npy', real_Jac)
+  # plot the real jacobian matrix, eliminate values smaller than 1e-10 to improve contrast
+  # real_Jac[np.abs(real_Jac)<1e-10] = 0
+  # make the plot of the real jacobian matrix, use a logarithmic color scale to improve contrast
+  # plt.imshow(real_Jac.real, aspect='auto', cmap='viridis', norm=plt.LogNorm(vmin=1e-10, vmax=np.max(np.abs(real_Jac.real))))
+  # plt.colorbar()
+  # plt.title('Real part of Jacobian')
+  # plt.savefig('full/real_jacobian.png')
   # plt.clf()
+  print('Computing eigenvalues', flush=True)
+  w, v = sparse.linalg.eigs(real_Jac.real, k=6, sigma=1.01, which='LM')
+  np.save('full/partial_eigs.npy', w)
+  print(w, flush=True)
+  plt.scatter(w.real, w.imag)
+  plt.savefig('full/partial_spectrum.png')
+  plt.clf()
   # R, C, sigmin = compute_pseudospectrum(real_Jac)
   # fig, ax = plt.subplots()
   # ax.scatter(w.real, w.imag)
