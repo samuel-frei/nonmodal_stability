@@ -23,6 +23,10 @@ class Matrix:
     self.lg = np.array(self.file[f'{mat_name}/lg'])-1
     self.kr = np.array(self.file[f'{mat_name}/kr'])-1
     self.M = np.array(self.file[f'{mat_name}/M'])
+    try:
+      self.bc_flags = np.array(self.file[f'{mat_name}/bc_flags']) > 0
+    except KeyError:
+      self.bc_flags = np.zeros(self.nr, dtype=bool)
     self.csr_rep = sparse.csr_array((self.M, self.lc, self.kr))
   def spy(self):
     plt.spy(self.csr_rep, markersize = 1, precision='present')
@@ -101,62 +105,57 @@ def compute_pseudospectrum(imat, grid_dim=10, nprocs=10, chunksize=10):
   return R, C, sigmin
 
 if __name__=="__main__":
-  try:
-    real_Jac = np.load('reduced/real_jacobian.npy')
-  except FileNotFoundError:
-    # Get jacobian and mass matrices from files
-    Mmat = Matrix('/ocean/projects/phy240045p/freiberg/pseudospectra/harris_linear/mass_mat.h5', '/massmat')
-    Jac = Matrix('/ocean/projects/phy240045p/freiberg/pseudospectra/harris_linear/lin_ops.h5', '/jacobian')
-    Mmat = Mmat.csr_rep.todense()
-    nr_block=Mmat.shape[0]
-    Mmat_big = scipy.linalg.block_diag(Mmat,Mmat,Mmat,Mmat,Mmat,Mmat,Mmat)
-    del Mmat  
-    # zero irrelevant blocks of the jacobian and plot its sparsity pattern
-    dense_Jac = Jac.csr_rep.todense()
-    dense_Jac[:nr_block, :] = 0
-    dense_Jac[:, :nr_block] = 0
-    dense_Jac[2*nr_block:3*nr_block, :] = 0
-    dense_Jac[:, 2*nr_block:3*nr_block] = 0
-    dense_Jac[4*nr_block:5*nr_block, :] = 0
-    dense_Jac[:, 4*nr_block:5*nr_block] = 0
-    dense_Jac[6*nr_block:, :] = 0
-    dense_Jac[:, 6*nr_block:] = 0
-    print(Jac.nrg, Jac.ncg, flush=True)
+  # Get jacobian and mass matrices from files
+  Mmat = Matrix('/ocean/projects/phy240045p/freiberg/pseudospectra/harris_linear/mass_mat.h5', '/massmat')
+  Jac = Matrix('/ocean/projects/phy240045p/freiberg/pseudospectra/harris_linear/lin_ops.h5', '/jacobian')
 
-    # assemble global matrices and reduce them to the relevant blocks
-    gl_block=int(Jac.nrg/7)
-    jac_gl = make_global_mat(dense_Jac, Jac.nrg, Jac.ncg, Jac.lg)
-    jac_gl_reduced = np.block([[jac_gl[gl_block:2*gl_block, gl_block:2*gl_block], jac_gl[gl_block:2*gl_block, 3*gl_block:4*gl_block], jac_gl[gl_block:2*gl_block, 5*gl_block:6*gl_block]], \
-                              [jac_gl[3*gl_block:4*gl_block, gl_block:2*gl_block], jac_gl[3*gl_block:4*gl_block, 3*gl_block:4*gl_block], jac_gl[3*gl_block:4*gl_block, 5*gl_block:6*gl_block]], \
-                              [jac_gl[5*gl_block:6*gl_block, gl_block:2*gl_block], jac_gl[5*gl_block:6*gl_block, 3*gl_block:4*gl_block], jac_gl[5*gl_block:6*gl_block, 5*gl_block:6*gl_block]]])
-    print('Shape of jac_gl_reduced is:', jac_gl_reduced.shape, flush=True)
-    min_svd = scipy.linalg.svdvals(jac_gl_reduced)[-1]
-    print(f"smallest singular value of reduced jacobian: {min_svd}", flush=True)
-    mmat_gl = make_global_mat(Mmat_big, Jac.nrg, Jac.ncg, Jac.lg)
-    mmat_gl_reduced = mmat_gl[:3*gl_block, :3*gl_block]
-    print('shape of mmat_gl_reduced is:', mmat_gl_reduced.shape, flush=True)
-    del Jac, dense_Jac, Mmat_big, jac_gl, mmat_gl, min_svd
-    # compute real jacobian
-    real_Jac = scipy.linalg.solve(jac_gl_reduced, mmat_gl_reduced)
-    del jac_gl_reduced, mmat_gl_reduced
-    np.save('reduced/real_jacobian.npy', real_Jac)
+  Mmat_big = scipy.sparse.block_diag([Mmat.csr_rep] * 7, format='csr')
+  del Mmat
+
+  # Boolean block masking: keep only blocks 2, 4, and 6 (zero-based 1, 3, 5).
+  nr_block = Jac.nr // 7
+  block_mask = np.zeros(Jac.nr, dtype=bool)
+  for i in (1, 3, 5):
+    block_mask[nr_block * i:nr_block * (i + 1)] = True
+
+  keep = block_mask
+
+  # If bc flags are present, also remove constrained rows/columns.
+  if np.any(Jac.bc_flags):
+    keep &= ~Jac.bc_flags
+
+  reduced_Jac = Jac.csr_rep[keep][:, keep].tocsr()
+  reduced_Mmat = Mmat_big[keep][:, keep].tocsr()
+
+  print(Jac.nrg, Jac.ncg, flush=True)
+  print('Shape of jac_gl_reduced is:', reduced_Jac.shape, flush=True)
+  min_svd = scipy.linalg.svdvals(reduced_Jac.toarray())[-1]
+  print(f"smallest singular value of reduced jacobian: {min_svd}", flush=True)
+  print('shape of mmat_gl_reduced is:', reduced_Mmat.shape, flush=True)
+  del Jac, Mmat_big, min_svd
+  # compute real jacobian
+  # real_Jac = scipy.linalg.solve(reduced_Jac.toarray(), reduced_Mmat.toarray())
+  # del reduced_Jac, reduced_Mmat
+  # np.save('reduced/real_jacobian.npy', real_Jac)
 
   # Compute eigenvalues
   print("computing eigenvalues", flush=True)
-  w = sparse.linalg.eigs(real_Jac, k=15, sigma=1.1, ncv=40, which="LM", tol=1e-8, return_eigenvectors=False)
+  w = sparse.linalg.eigs(reduced_Jac, M=reduced_Mmat, k=15, sigma=1, ncv=40, which="LM", tol=1e-8, return_eigenvectors=False)
+  w = 1/w
   np.save('reduced/full_reduced_eigs.npy', w)
   print(w, flush=True)
   plt.scatter(w.real, w.imag)
   plt.savefig('reduced/full_reduced_spectrum.png')
   # Compute schur factorization
   # if full_reduced_schur.npy already exists, load it, otherwise compute it and save it to avoid recomputation in the future
-  try:
-    T = np.load('reduced/full_reduced_schur.npy')
-  except FileNotFoundError:
-    print("computing schur factorization", flush=True)
-    _, T = scipy.linalg.schur(real_Jac, output='complex')
-    np.save('reduced/full_reduced_schur.npy', T)
-  del real_Jac
+  # try:
+  #   T = np.load('reduced/full_reduced_schur.npy')
+  # except FileNotFoundError:
+  #   print("computing schur factorization", flush=True)
+  #   _, T = scipy.linalg.schur(real_Jac, output='complex')
+  #   np.save('reduced/full_reduced_schur.npy', T)
+  # del real_Jac
+
   # R, C, sigmin = compute_pseudospectrum(T, grid_dim=25, nprocs=10, chunksize=100)
   # del T
   # # save grid and sigmin
