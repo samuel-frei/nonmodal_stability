@@ -19,14 +19,15 @@
 &cube_options
  mesh_type=1
  ref_per=T,F,F
- ni=20,40,0
+ ni=10,20,0
  rscale=25.6,12.8,0.0
  shift=-12.8,-6.4,0.0
+ packing=1.0, 0.5, 0.0
 /
 
 &xmhd_options
   linear=T
-  order=2
+  order=3
   n0=5.196374E16
   psi0=0.002045692328575E0,
   velx0=0,
