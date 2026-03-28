@@ -1,7 +1,7 @@
 import os
-os.environ["OMP_NUM_THREADS"] = "12"  
-os.environ["MKL_NUM_THREADS"] = "12"
-os.environ["OPENBLAS_NUM_THREADS"] = "12"
+os.environ["OMP_NUM_THREADS"] = "1"  
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
 import h5py
 import scipy
 import scipy.sparse as sparse
@@ -77,17 +77,19 @@ def _compute_sig_point(args):
     sig_min=vals[0]
     return i, j, 1/np.sqrt(sig_min)
 
-# Compute the pseudospectrum by iterating over a grid of points in the complex plane, and for each point, 
-# computing the smallest singular value of zI - T using the _compute_sig_point function.
-def compute_pseudospectrum(imat, grid_dim=10, nprocs=10, chunksize=10):
+# Compute the pseudospectrum by iterating over a grid of points 
+# in the complex plane, and for each point, 
+# computing the smallest singular value of zI - T using the 
+# _compute_sig_point function.
+def compute_pseudospectrum(imat, grid_dim=10, nprocs=10, chunksize=10, eps=1e-4):
   T = imat
 
   shm = shared_memory.SharedMemory(create=True, size=T.nbytes)
   T_shm = np.ndarray(T.shape, dtype=T.dtype, buffer=shm.buf)
   np.copyto(T_shm, T)
   
-  r = np.linspace(1.0, 1.002, grid_dim)
-  c = np.linspace(-7e-3, 7e-3, grid_dim)
+  r = np.linspace(-eps, eps, grid_dim)
+  c = np.linspace(-eps, eps, grid_dim)
   R, C =  np.meshgrid(r, c)
   zz = R + 1j * C
   sigmin = np.zeros((grid_dim, grid_dim))
@@ -107,75 +109,77 @@ def compute_pseudospectrum(imat, grid_dim=10, nprocs=10, chunksize=10):
   return R, C, sigmin
 
 if __name__=="__main__":
-  # Get jacobian and mass matrices from files
-  Mmat = Matrix('/ocean/projects/phy240045p/freiberg/pseudospectra/harris_linear/mass_mat.h5', '/massmat')
-  Jac = Matrix('/ocean/projects/phy240045p/freiberg/pseudospectra/harris_linear/lin_ops.h5', '/jacobian')
+  try:
+    # Try to load precomputed reduced jacobian and mass matrices
+    real_Jac = np.load('reduced/real_jacobian.npy')
+  except:
+    # Get jacobian and mass matrices from files
+    Mmat = Matrix('/ocean/projects/phy240045p/freiberg/pseudospectra/harris_linear/mass_mat.h5', '/massmat')
+    Jac = Matrix('/ocean/projects/phy240045p/freiberg/pseudospectra/harris_linear/lin_ops.h5', '/jacobian')
 
-  Mmat_big = scipy.sparse.block_diag([Mmat.csr_rep] * 7, format='csr')
-  del Mmat
+    Mmat_big = scipy.sparse.block_diag([Mmat.csr_rep] * 7, format='csr')
+    del Mmat
 
-  jac_gl = make_global_mat(Jac.csr_rep.toarray(), nrg=Jac.nrg, ncg=Jac.ncg, lg=Jac.lg)
-  jac_gl = sparse.csr_array(jac_gl)
-  jac_gl.eliminate_zeros()
+    jac_gl = make_global_mat(Jac.csr_rep.toarray(), nrg=Jac.nrg, ncg=Jac.ncg, lg=Jac.lg)
+    jac_gl = sparse.csr_array(jac_gl)
+    jac_gl.eliminate_zeros()
 
-  mmat_gl = make_global_mat(Mmat_big.toarray(), nrg=Jac.nrg, ncg=Jac.ncg, lg=Jac.lg)
-  mmat_gl = sparse.csr_array(mmat_gl)
-  mmat_gl.eliminate_zeros()
+    mmat_gl = make_global_mat(Mmat_big.toarray(), nrg=Jac.nrg, ncg=Jac.ncg, lg=Jac.lg)
+    mmat_gl = sparse.csr_array(mmat_gl)
+    mmat_gl.eliminate_zeros()
 
-  print('Shape of jac_gl is:', jac_gl.shape, flush=True)
-  print('shape of mmat_gl is:', mmat_gl.shape, flush=True)
+    print('Shape of jac_gl is:', jac_gl.shape, flush=True)
+    print('shape of mmat_gl is:', mmat_gl.shape, flush=True)
 
-  # Boolean block masking: keep only blocks 2, 4, and 6 (zero-based 1, 3, 5).
-  nrg_block = Jac.nrg // 7
-  block_mask = np.zeros(Jac.nrg, dtype=bool)
-  for i in (0, 1, 3, 4, 5):
-    block_mask[nrg_block * i:nrg_block * (i + 1)] = True
+    # Boolean block masking: keep only blocks 2, 4, and 6 (zero-based 1, 3, 5).
+    nrg_block = Jac.nrg // 7
+    block_mask = np.zeros(Jac.nrg, dtype=bool)
+    for i in (0, 1, 3, 4, 5):
+      block_mask[nrg_block * i:nrg_block * (i + 1)] = True
 
-  keep = block_mask
+    keep = block_mask
 
-  # If bc flags are present, also remove constrained rows/columns.
-  if np.any(Jac.bcg):
-    keep &= ~Jac.bcg
+    # If bc flags are present, also remove constrained rows/columns.
+    if np.any(Jac.bcg):
+      keep &= ~Jac.bcg
 
-  reduced_Jac = jac_gl[keep][:, keep].tocsr()
-  reduced_Mmat = mmat_gl[keep][:, keep].tocsr()
+    reduced_Jac = jac_gl[keep][:, keep].tocsr()
+    reduced_Mmat = mmat_gl[keep][:, keep].tocsr()
 
-  print('Shape of jac_gl_reduced is:', reduced_Jac.shape, flush=True)
-  print('shape of mmat_gl_reduced is:', reduced_Mmat.shape, flush=True)
+    print('Shape of jac_gl_reduced is:', reduced_Jac.shape, flush=True)
+    print('shape of mmat_gl_reduced is:', reduced_Mmat.shape, flush=True)
 
-  # compute real jacobian
-  real_Jac = sparse.linalg.spsolve(reduced_Jac, reduced_Mmat.toarray())
-  del reduced_Jac, reduced_Mmat
-  np.save('reduced/real_jacobian.npy', real_Jac)
+    # compute real jacobian
+    real_Jac = sparse.linalg.spsolve(reduced_Jac, reduced_Mmat.toarray())
+    del reduced_Jac, reduced_Mmat
+    np.save('reduced/real_jacobian.npy', real_Jac)
 
   # Compute eigenvalues
-  print("computing eigenvalues", flush=True)
-  w, v = sparse.linalg.eigs(real_Jac, k=20, sigma=1.001, which="LM")
-  print(w)
-  np.save('reduced/full_reduced_eigs.npy', w)
-  plt.scatter(w.real, w.imag)
-  plt.savefig('reduced/full_reduced_spectrum.png')
+  try: 
+    w = np.load('reduced/full_reduced_eigs.npy')
+  except FileNotFoundError:
+    print("computing eigenvalues", flush=True)
+    w, v = sparse.linalg.eigs(real_Jac, k=80, ncv=180, sigma=1.001, which="LM")
+    print(w)
+    np.save('reduced/full_reduced_eigs.npy', w)
+    plt.scatter(w.real, w.imag)
+    plt.savefig('reduced/full_reduced_spectrum.png')
+
   # Compute schur factorization
   # if full_reduced_schur.npy already exists, load it, otherwise compute it and save it to avoid recomputation in the future
   try:
     T = np.load('reduced/full_reduced_schur.npy')
   except FileNotFoundError:
     print("computing schur factorization", flush=True)
-    _, T = scipy.linalg.schur(real_Jac, output='complex')
+    T, _ = scipy.linalg.schur(real_Jac, output='complex')
     plt.scatter(T.diagonal().real, T.diagonal().imag)
     plt.savefig('reduced/full_reduced_schur_eigs.png')
     np.save('reduced/full_reduced_schur.npy', T)
   del real_Jac
-
-  # R, C, sigmin = compute_pseudospectrum(T, grid_dim=25, nprocs=10, chunksize=100)
-  # del T
-  # # save grid and sigmin
-  # np.save('reduced/pseudo_R.npy', R)
-  # np.save('reduced/pseudo_C.npy', C)
-  # np.save('reduced/pseudo_sigmin.npy', sigmin)
-  # fig, ax = plt.subplots()
-  # ax.scatter(w.real, w.imag)
-  # artist = ax.contour(R, C, sigmin)
-  # ax.clabel(artist, fontsize=10)
-  # ax.set_title('Pseudospectrum')
-  # plt.savefig('reduced/pseudoplot.png', format='png')
+  eps = 1e-4
+  R, C, sigmin = compute_pseudospectrum(T, grid_dim=32, nprocs=128, chunksize=8, eps=eps)
+  del T
+  # save grid and sigmin
+  np.save('reduced/pseudo_R.npy', R)
+  np.save('reduced/pseudo_C.npy', C)
+  np.save('reduced/pseudo_sigmin.npy', sigmin)
