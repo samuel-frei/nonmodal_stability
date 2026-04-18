@@ -19,7 +19,7 @@
 &cube_options
  mesh_type=1
  ref_per=T,F,F
- ni=10,6,0
+ ni=20,6,0
  rscale=6.4,3.2,0.0
  shift=-3.2,-1.6,0.0
  packing=1.0, 0.5, 0.0
@@ -51,4 +51,10 @@
   rst_freq=10
   use_mfnk=F
   pm=F
+  plot_run=F
+/
+
+&xmhd_plot_options
+  rst_start=0
+  rst_end=39
 /

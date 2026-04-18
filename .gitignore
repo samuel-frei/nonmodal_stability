@@ -1,9 +1,0 @@
-*.rst
-*.out
-oft_xdmf*
-oft_xmhd2d*
-lin_ops.h5
-mass_mat.h5
-scripts/full
-scripts/partial_red
-scripts/reduced

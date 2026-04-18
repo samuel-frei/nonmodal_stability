@@ -2,7 +2,7 @@
 
 #SBATCH --job-name=mug
 #SBATCH --partition=RM
-#SBATCH --nodes=1
+#SBATCH -n 4
 #SBATCH -t 0-00:15:00
 
 source /jet/home/freiberg/.bashrc

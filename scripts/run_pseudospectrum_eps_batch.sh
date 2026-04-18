@@ -10,7 +10,7 @@ if [[ ! -f "${PY_SCRIPT}" ]]; then
   exit 1
 fi
 
-OUT_BASE="${SCRIPT_DIR}/batch_pseudospectra"
+OUT_BASE="${OUT_BASE:-${SCRIPT_DIR}/outputs}"
 EXPECTED_RUN_DB_HEADER="submit_utc,run_tag,case_tag,job_id,job_name,state,dependency_job_id,grid_points,nprocs,cpus_per_task,time_limit,partition,real_min,real_max,imag_min,imag_max,output_dir,job_script,stdout_log,stderr_log"
 
 if [[ $# -gt 0 ]]; then
@@ -21,14 +21,14 @@ fi
 
 NODE_CORES="${NODE_CORES:-128}"
 GRID_POINTS="${GRID_POINTS:-${NODE_CORES}}"
-NPROCS="${NPROCS:-${NODE_CORES}}"
-BLOCK_FACTOR="${BLOCK_FACTOR:-8}"
-MIN_LEVEL="${MIN_LEVEL:-1e-12}"
-NLEVELS="${NLEVELS:-5}"
-REAL_MIN="${REAL_MIN:-}"
-REAL_MAX="${REAL_MAX:-}"
-IMAG_MIN="${IMAG_MIN:-}"
-IMAG_MAX="${IMAG_MAX:-}"
+NPROCS="${NPROCS:-${NODE_CORES:-128}}"
+BLOCK_FACTOR="${BLOCK_FACTOR:-4}"
+MIN_LEVEL="${MIN_LEVEL:-1e-8}"
+NLEVELS="${NLEVELS:-8}"
+REAL_MIN="${REAL_MIN:-0.1}"
+REAL_MAX="${REAL_MAX:-2.0}"
+IMAG_MIN="${IMAG_MIN:--0.3}"
+IMAG_MAX="${IMAG_MAX:-0.3}"
 REAL_SWEEP_WINDOWS="${REAL_SWEEP_WINDOWS:-}"
 
 # Slurm controls (override via environment variables).
@@ -227,7 +227,7 @@ for CASE_TAG in "${CASE_TAGS[@]}"; do
   SAFE_TAG="${SAFE_TAG//+/}"
 
   RUN_OUT="${OUT_DIR}/c${COUNT}_${SAFE_TAG}"
-  PLOT_NAME="pseudoplot_${SAFE_TAG}.png"
+  PLOT_NAME="pseudoplot_${SAFE_TAG}.html"
   mkdir -p "${RUN_OUT}"
 
   JOB_NAME="ps${COUNT}"
