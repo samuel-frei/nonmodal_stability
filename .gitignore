@@ -1,3 +1,13 @@
 *.rst
 *.xmf
+*.npy
+*.out
 *.h5
+*.log
+*.html
+*.json
+*.hist
+*.png
+*.ini
+harris_linear_20x6z/data/
+harris_linear_20x6z/eigvecs_plot/
