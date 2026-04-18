@@ -1,0 +1,60 @@
+&runtime_options
+  ppn=1
+  debug=3
+/
+
+&mesh_options
+  meshname='test'
+  cad_type=92
+  nlevels=1
+  nbase=1
+  grid_order=2
+  fix_boundary=T
+/
+
+&native_mesh_options
+  filename="circle_2d.h5"
+/
+
+&cube_options
+ mesh_type=1
+ ref_per=T,F,F
+ ni=20,6,0
+ rscale=6.4,3.2,0.0
+ shift=-3.2,-1.6,0.0
+ packing=1.0, 0.5, 0.0
+/
+
+&xmhd_options
+  linear=T
+  order=3
+  n0=5.196374E16
+  psi0=0.002045692328575E0,
+  velx0=0,
+  vely0=0,
+  velz0=0,
+  t0=1E2,
+  by0=0,
+  chi=2943.4,
+  eta=9.3317868E-4
+  nu=6.45427171e-7
+  delta = 1.E-1
+  gamma=1.67
+  D_diff=1.E1
+  den_scale = 5.196374E16
+  dt=1.E-7
+  lam_b = 0.625E0
+  lam_n = 0.625E0
+  L_x = 6.4E0
+  L_z = 3.2E0
+  nsteps=120
+  rst_freq=1
+  use_mfnk=F
+  pm=T
+  plot_run=F
+/
+
+&xmhd_plot_options
+  rst_start=0
+  rst_end=39
+/
