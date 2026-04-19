@@ -1,6 +1,6 @@
 &runtime_options
   ppn=1
-  debug=3
+  debug=0
 /
 
 &mesh_options
@@ -10,10 +10,6 @@
   nbase=1
   grid_order=2
   fix_boundary=T
-/
-
-&native_mesh_options
-  filename="circle_2d.h5"
 /
 
 &cube_options
@@ -43,14 +39,14 @@
   D_diff=1.E1
   den_scale = 5.196374E16
   dt=1.E-7
-  lam_b = 0.625E0
-  lam_n = 0.625E0
+  lam_b = 0.60625E0
+  lam_n = 0.60625E0
   L_x = 6.4E0
   L_z = 3.2E0
   nsteps=120
   rst_freq=1
   use_mfnk=F
-  pm=T
+  pm=F
   plot_run=F
 /
 

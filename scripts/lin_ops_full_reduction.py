@@ -27,6 +27,11 @@ import scipy
 from numba import njit
 from scipy import sparse
 
+try:
+  import plotly.graph_objects as go
+except ImportError:
+  go = None
+
 
 FIELD_BLOCK_COUNT = 7
 KEPT_BLOCK_IDS = (0, 1, 3, 4, 5)
@@ -35,6 +40,7 @@ EIGVAL_CACHE = './full_reduced_eigvals.npy'
 EIGVEC_CACHE = './full_reduced_eigvecs.npy'
 SCHUR_CACHE = './full_reduced_schur.npy'
 DT = 1e-7
+GRID_PLOT_NAME = 'grid_plot'
 
 
 class Matrix:
@@ -179,15 +185,26 @@ def _coarse_seed_bounds_from_spectrum(eigvals, pad_distance):
 
 def _extract_contour_vertices(R, C, sigmin, level):
   """Extract contour vertices at one level from sampled pseudospectrum values."""
+  segments = _extract_contour_segments(R, C, sigmin, level)
+  if not segments:
+    return np.empty((0, 2), dtype=float)
+
+  verts = np.vstack(segments)
+  keep = np.isfinite(verts).all(axis=1)
+  return verts[keep]
+
+
+def _extract_contour_segments(R, C, sigmin, level):
+  """Extract contour polyline segments at one level from sampled values."""
   sig = np.asarray(sigmin, dtype=float)
   finite = np.isfinite(sig)
   if not np.any(finite):
-    return np.empty((0, 2), dtype=float)
+    return []
 
   data_min = float(np.nanmin(sig[finite]))
   data_max = float(np.nanmax(sig[finite]))
   if level < data_min or level > data_max:
-    return np.empty((0, 2), dtype=float)
+    return []
 
   x_axis = np.asarray(R, dtype=float)
   y_axis = np.asarray(C, dtype=float)
@@ -214,11 +231,204 @@ def _extract_contour_vertices(R, C, sigmin, level):
     plt.close(fig)
 
   if not segments:
-    return np.empty((0, 2), dtype=float)
+    return []
 
-  verts = np.vstack(segments)
-  keep = np.isfinite(verts).all(axis=1)
-  return verts[keep]
+  cleaned = []
+  for seg in segments:
+    keep = np.isfinite(seg).all(axis=1)
+    seg_keep = seg[keep]
+    if seg_keep.shape[0] >= 2:
+      cleaned.append(seg_keep)
+  return cleaned
+
+
+def _format_scientific(value, digits=3):
+  """Format a scalar in scientific notation with fixed precision."""
+  return f'{float(value):.{int(digits)}e}'
+
+
+def _segment_arclength(segment):
+  """Compute total arc length of a contour segment."""
+  seg = np.asarray(segment, dtype=float)
+  if seg.shape[0] < 2:
+    return 0.0
+  delta = np.diff(seg, axis=0)
+  return float(np.sum(np.hypot(delta[:, 0], delta[:, 1])))
+
+
+def _segment_midpoint(segment):
+  """Return arclength midpoint of a polyline segment."""
+  seg = np.asarray(segment, dtype=float)
+  if seg.shape[0] == 0:
+    return np.array([np.nan, np.nan], dtype=float)
+  if seg.shape[0] == 1:
+    return np.array(seg[0], dtype=float)
+
+  delta = np.diff(seg, axis=0)
+  steps = np.hypot(delta[:, 0], delta[:, 1])
+  total = float(np.sum(steps))
+  if total <= 0.0:
+    return np.array(seg[seg.shape[0] // 2], dtype=float)
+
+  cum = np.concatenate(([0.0], np.cumsum(steps)))
+  target = 0.5 * total
+  idx = int(np.searchsorted(cum, target, side='right') - 1)
+  idx = min(max(idx, 0), steps.size - 1)
+  span = steps[idx]
+  if span <= 0.0:
+    return np.array(seg[idx], dtype=float)
+  frac = (target - cum[idx]) / span
+  return np.array(seg[idx] + frac * (seg[idx + 1] - seg[idx]), dtype=float)
+
+
+def _make_log10_sigmin(sigmin):
+  """Return log10(sigmin) array with non-positive/non-finite entries masked."""
+  values = np.asarray(sigmin, dtype=float)
+  mask = np.isfinite(values) & (values > 0.0)
+  out = np.full(values.shape, np.nan, dtype=float)
+  if np.any(mask):
+    out[mask] = np.log10(values[mask])
+  return out
+
+
+def _build_log_color_ticks(log_values, nticks=6):
+  """Build colorbar ticks and labels for log10-valued heatmaps."""
+  finite = np.isfinite(log_values)
+  if not np.any(finite):
+    tickvals = np.array([0.0], dtype=float)
+    ticktext = ['nan']
+    return tickvals, ticktext, 0.0, 0.0
+
+  vmin = float(np.nanmin(log_values[finite]))
+  vmax = float(np.nanmax(log_values[finite]))
+  if vmax <= vmin:
+    vmax = np.nextafter(vmin, np.inf)
+
+  tickvals = np.linspace(vmin, vmax, int(max(2, nticks)))
+  ticktext = [_format_scientific(10.0 ** val, digits=3) for val in tickvals]
+  return tickvals, ticktext, vmin, vmax
+
+
+def _ensure_html_filename(name, label):
+  """Normalize output HTML filename and preserve prior logging behavior."""
+  val = str(name).strip()
+  if not val:
+    raise ValueError(f'{label} must not be empty')
+  if not val.lower().endswith('.html'):
+    fixed = f'{val}.html'
+    print(f'adjusted {label} to HTML output: {fixed}', flush=True)
+    return fixed
+  return val
+
+
+def plot_pseudospectrum(
+  output_dir,
+  plot_name,
+  R,
+  C,
+  sigmin,
+  eigvals,
+  levels):
+  """Render interactive contour plot with Plotly smoothing."""
+  levels = np.asarray(levels, dtype=float).ravel()
+  if levels.size == 0:
+    raise ValueError('levels must contain at least one contour value')
+
+  x_axis = np.asarray(R, dtype=float)[0, :]
+  y_axis = np.asarray(C, dtype=float)[:, 0]
+  log_sig = _make_log10_sigmin(sigmin)
+  tickvals, ticktext, zmin, zmax = _build_log_color_ticks(log_sig)
+
+  fig = go.Figure()
+  fig.add_trace(go.Heatmap(
+    x=x_axis,
+    y=y_axis,
+    z=log_sig,
+    zmin=zmin,
+    zmax=zmax,
+    zsmooth='best',
+    colorscale='Viridis',
+    colorbar={
+      'title': 'sigmin',
+      'tickmode': 'array',
+      'tickvals': tickvals,
+      'ticktext': ticktext,
+      'ticks': 'outside',
+    },
+    hovertemplate='Re[z]=%{x:.6g}<br>Im[z]=%{y:.6g}<br>log10(sigmin)=%{z:.4f}<extra></extra>'))
+
+  annotations = []
+  for i, level in enumerate(levels):
+    segments = _extract_contour_segments(R, C, sigmin, level)
+    if not segments:
+      continue
+
+    for j, seg in enumerate(segments):
+      fig.add_trace(go.Scatter(
+        x=seg[:, 0],
+        y=seg[:, 1],
+        mode='lines',
+        hoverinfo='skip',
+        showlegend=(i == 0 and j == 0),
+        name='contours',
+        line={'color': 'black', 'width': 1, 'shape': 'spline', 'smoothing': 1.0}))
+
+    longest = max(segments, key=_segment_arclength)
+    pt = _segment_midpoint(longest)
+    if np.all(np.isfinite(pt)):
+      annotations.append({
+        'x': float(pt[0]),
+        'y': float(pt[1]),
+        'text': _format_scientific(level, digits=2),
+        'showarrow': False,
+        'xanchor': 'center',
+        'yanchor': 'middle',
+        'font': {'size': 10, 'color': 'black'},
+        'bgcolor': 'rgba(255,255,255,0.92)',
+        'borderwidth': 0,
+      })
+
+  eigvals_arr = _finite_complex_values(eigvals)
+  if eigvals_arr.size > 0:
+    fig.add_trace(go.Scatter(
+      x=eigvals_arr.real,
+      y=eigvals_arr.imag,
+      mode='markers',
+      name='eigenvalues',
+      marker={'size': 2.5, 'color': 'black', 'opacity': 0.65},
+      hovertemplate='Re[lambda]=%{x:.6g}<br>Im[lambda]=%{y:.6g}<extra></extra>'))
+
+  fig.update_layout(
+    title='Pseudospectrum contour (interactive)',
+    xaxis={'title': 'Re[z]', 'tickformat': '.3g', 'constrain': 'domain'},
+    yaxis={'title': 'Im[z]', 'tickformat': '.3g'},
+    margin={'l': 60, 'r': 200, 'b': 55, 't': 50},
+    legend={'x': 0.01, 'y': 0.99},
+    dragmode='zoom',
+    annotations=annotations)
+
+  out_path = os.path.join(output_dir, plot_name)
+  fig.write_html(out_path, include_plotlyjs='cdn')
+  print(f'wrote interactive contour: {out_path}', flush=True)
+
+
+def plot_sampling_grid(output_dir, grid_plot_name, R, C):
+  """Render a simple static Matplotlib reference plot for sampled (Re, Im) grid."""
+  x_grid = np.asarray(R, dtype=float)
+  y_grid = np.asarray(C, dtype=float)
+  fig, ax = plt.subplots(figsize=(8.5, 6.5))
+  ax.plot(x_grid.ravel(), y_grid.ravel(), linestyle='None', marker='.', markersize=2.5, color='k')
+  ax.set_title('Final pseudospectrum sampling grid')
+  ax.set_xlabel('Re[z]')
+  ax.set_ylabel('Im[z]')
+  ax.grid(True, alpha=0.3)
+  ax.set_aspect('equal', adjustable='box')
+  fig.tight_layout()
+
+  out_path = os.path.join(output_dir, f'{grid_plot_name}.png')
+  fig.savefig(out_path, dpi=200)
+  plt.close(fig)
+  print(f'wrote sampling-grid reference: {out_path}', flush=True)
 
 
 def _compute_adaptive_bounds(contour_vertices, eigvals, pad_distance):
@@ -422,7 +632,9 @@ def build_run_metadata(
   cols,
   grid_strategy='uniform',
   adaptive_info=None,
-  requested_bounds=None) -> Dict[str, Any]:
+  requested_bounds=None,
+  level_values=None,
+  plot_info=None) -> Dict[str, Any]:
   """Build structured metadata describing one pseudospectrum run."""
   grid_points_effective = int(rows) * int(cols)
   effective_workers = _effective_worker_count(grid_points_effective, args.nprocs)
@@ -433,7 +645,7 @@ def build_run_metadata(
   if adaptive_info is None:
     adaptive_info = {'enabled': False}
 
-  return {
+  metadata = {
     'created_utc': datetime.now(timezone.utc).isoformat(timespec='seconds').replace('+00:00', 'Z'),
     'hostname': socket.gethostname(),
     'cwd': os.getcwd(),
@@ -463,9 +675,18 @@ def build_run_metadata(
     },
     'levels': {
       'min_level': float(args.min_level),
+      'nlevels': int(args.nlevels),
     },
     'adaptive': adaptive_info,
   }
+
+  if level_values is not None:
+    metadata['levels']['values'] = [float(v) for v in np.asarray(level_values, dtype=float).ravel()]
+
+  if plot_info is not None:
+    metadata['plot'] = dict(plot_info)
+
+  return metadata
 
 
 def write_run_metadata(output_dir, metadata):
@@ -632,11 +853,11 @@ def parse_args() -> argparse.Namespace:
   parser.add_argument('--grid-points', type=int, default=128, help='Total number of grid points (minimum 128).')
   parser.add_argument('--adaptive-grid', action='store_true',
                       help='Enable two-pass adaptive grid focused near a contour level.')
-  parser.add_argument('--adaptive-coarse-fraction', type=float, default=0.25,
+  parser.add_argument('--adaptive-coarse-fraction', type=float, default=0.125,
                       help='Fraction of final grid points used in coarse adaptive pass (0 < value <= 1).')
   parser.add_argument('--adaptive-contour-level', type=float, default=None,
                       help='Contour level used to build adaptive focused grid (defaults to --min-level).')
-  parser.add_argument('--adaptive-pad-distance', type=float, default=0.0,
+  parser.add_argument('--adaptive-pad-distance', type=float, default=5.e5,
                       help='Absolute padding distance from the adaptive contour envelope.')
   parser.add_argument('--adaptive-focus-strength', type=float, default=8.0,
                       help='Density weighting strength near contour projections for adaptive axes (>= 0).')
@@ -651,7 +872,11 @@ def parse_args() -> argparse.Namespace:
                       help='Sampled imaginary-axis minimum.')
   parser.add_argument('--imag-max', type=float, required=True,
                       help='Sampled imaginary-axis maximum.')
+  parser.add_argument('--nlevels', type=int, default=8,
+                      help='Number of contour levels for interactive pseudospectrum plot.')
   parser.add_argument('--min-level', type=float, default=1e-5, help='Minimum contour level.')
+  parser.add_argument('--plot-name', type=str, default='pseudoplot_default.html',
+                      help='Interactive contour plot output filename.')
   parser.add_argument('--run-tag', type=str, default='', help='Batch-level run identifier for metadata tracking.')
   parser.add_argument('--case-tag', type=str, default='', help='Case identifier for metadata tracking.')
   parser.add_argument('--output-dir', type=str, default='pseudospectrum', help='Output directory for arrays and metadata.')
@@ -664,6 +889,8 @@ def validate_and_normalize_args(args) -> Tuple[float, float, float, float]:
     raise ValueError('nprocs must be >= 1')
   if args.grid_points < 1:
     raise ValueError('grid-points must be >= 1')
+  if args.nlevels < 1:
+    raise ValueError('nlevels must be >= 1')
   if args.min_level <= 0.0:
     raise ValueError('min-level must be positive')
   if args.adaptive_coarse_fraction <= 0.0 or args.adaptive_coarse_fraction > 1.0:
@@ -693,6 +920,8 @@ def validate_and_normalize_args(args) -> Tuple[float, float, float, float]:
     print(
       'adaptive-grid enabled: final pass ignores --real/--imag bounds and uses spectrum-guided bounds',
       flush=True)
+
+  args.plot_name = _ensure_html_filename(args.plot_name, 'plot-name')
   return real_min, real_max, imag_min, imag_max
 
 
@@ -972,9 +1201,43 @@ def run_pipeline(args):
     cols=cols,
     grid_strategy=grid_strategy,
     adaptive_info=adaptive_info,
-    requested_bounds=requested_bounds)
-  write_run_metadata(args.output_dir, metadata)
+    requested_bounds=requested_bounds,
+    level_values=None,
+    plot_info=None)
 
+  if go is None:
+    raise ImportError('plotly is required for interactive plots; install plotly')
+
+  levels = choose_contour_levels(sigmin, min_level=args.min_level, nlevels=args.nlevels)
+  print(
+    f'plot_pseudospectrum: levels={np.array2string(levels, precision=3)}, '
+    f'xlim=({final_re_min:.6g}, {final_re_max:.6g}), '
+    f'ylim=({final_im_min:.6g}, {final_im_max:.6g})',
+    flush=True)
+
+  plot_pseudospectrum(
+    args.output_dir,
+    args.plot_name,
+    R,
+    C,
+    sigmin,
+    eigvals,
+    levels)
+  plot_sampling_grid(
+    args.output_dir,
+    GRID_PLOT_NAME,
+    R,
+    C)
+
+  metadata['levels']['values'] = [float(v) for v in np.asarray(levels, dtype=float).ravel()]
+  plot_info = {
+    'enabled': True,
+    'plot_name': args.plot_name,
+    'grid_plot_name': f'{GRID_PLOT_NAME}.png',
+  }
+  metadata['plot'] = plot_info
+
+  write_run_metadata(args.output_dir, metadata)
   save_pseudospectrum_arrays(args.output_dir, R, C, sigmin)
 
 
