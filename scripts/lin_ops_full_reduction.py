@@ -8,15 +8,14 @@ plots. It is designed for batch execution and supports multiprocessing.
 
 import os
 
-os.environ["OMP_NUM_THREADS"] = "16"
-os.environ["MKL_NUM_THREADS"] = "16"
-os.environ["OPENBLAS_NUM_THREADS"] = "16"
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
 
 import argparse
 import json
 import multiprocessing
 import socket
-import warnings
 from datetime import datetime, timezone
 from typing import Any, Dict, Tuple
 
@@ -188,21 +187,45 @@ def _compute_sigmin_points(zz_flat, T, nprocs, progress_label='pseudospectrum po
 
   return sigmin_flat
 
-def plot_pseudospectrum(
-  output_dir,
-  plot_name,
-  R,
-  C,
-  sigmin,
-  eigvals,
-  levels):
-  """Render interactive contour plot with Plotly smoothing."""
-  levels = np.asarray(levels, dtype=float).ravel()
-  if levels.size == 0:
-    raise ValueError('levels must contain at least one contour value')
+def _split_plot_output_names(plot_name: str) -> Tuple[str, str]:
+  """Derive separate output names for heatmap and contour views."""
+  stem, ext = os.path.splitext(str(plot_name))
+  ext = ext if ext else '.html'
+  return f'{stem}_heatmap{ext}', f'{stem}_contours{ext}'
+
+
+def _add_eigenvalue_overlay(fig, eigvals):
+  """Overlay eigenvalue markers on an existing Plotly figure."""
+  eigvals_arr = np.asarray(eigvals).ravel()
+  if eigvals_arr.size > 0:
+    mask = np.isfinite(eigvals_arr.real) & np.isfinite(eigvals_arr.imag)
+    eigvals_arr = eigvals_arr[mask]
+  if eigvals_arr.size > 0:
+    fig.add_trace(go.Scatter(
+      x=eigvals_arr.real,
+      y=eigvals_arr.imag,
+      mode='markers',
+      name='eigenvalues',
+      marker={'size': 2.5, 'color': 'black', 'opacity': 0.65},
+      hovertemplate='Re[lambda]=%{x:.6g}<br>Im[lambda]=%{y:.6g}<extra></extra>'))
+
+
+def pseudo_heatmap(output_dir, plot_name, R, C, sigmin, eigvals):
+  """Render an interactive heatmap view of pseudospectrum values."""
+  title_font_size = 20
+  axis_title_font_size = 18
+  axis_tick_font_size = 14
+  colorbar_title_font_size = 18
+  colorbar_tick_font_size = 14
+  legend_font_size = 14
 
   x_axis = np.asarray(R, dtype=float)[0, :]
   y_axis = np.asarray(C, dtype=float)[:, 0]
+  x_min = float(np.min(x_axis))
+  x_max = float(np.max(x_axis))
+  y_min = float(np.min(y_axis))
+  y_max = float(np.max(y_axis))
+
   sig_values = np.asarray(sigmin, dtype=float)
   positive_finite = np.isfinite(sig_values) & (sig_values > 0.0)
   log_sig = np.full(sig_values.shape, np.nan, dtype=float)
@@ -223,8 +246,7 @@ def plot_pseudospectrum(
     tickvals = np.linspace(zmin, zmax, 6)
     ticktext = [f'{10.0 ** val:.3e}' for val in tickvals]
 
-  fig = go.Figure()
-  fig.add_trace(go.Heatmap(
+  fig = go.Figure(go.Heatmap(
     x=x_axis,
     y=y_axis,
     z=log_sig,
@@ -233,120 +255,138 @@ def plot_pseudospectrum(
     zsmooth='best',
     colorscale='Viridis',
     colorbar={
-      'title': 'sigmin',
+      'title': {
+        'text': 'ε',
+        'font': {'size': colorbar_title_font_size},
+      },
       'tickmode': 'array',
       'tickvals': tickvals,
       'ticktext': ticktext,
-      'ticks': 'outside',
+      'tickfont': {'size': colorbar_tick_font_size},
+      'ticks': '',
+      'ticklen': 0,
     },
-    hovertemplate='Re[z]=%{x:.6g}<br>Im[z]=%{y:.6g}<br>log10(sigmin)=%{z:.4f}<extra></extra>'))
+    hovertemplate='Re[z]=%{x:.6g}<br>Im[z]=%{y:.6g}<br>log10(epsilon)=%{z:.4f}<extra></extra>'))
 
-  annotations = []
-  finite_sig = np.isfinite(sig_values)
-  safe_sig = np.array(sig_values, copy=True)
-  safe_sig[~finite_sig] = np.nan
-  has_finite_sig = bool(np.any(finite_sig))
-  if has_finite_sig:
-    data_min = float(np.nanmin(sig_values[finite_sig]))
-    data_max = float(np.nanmax(sig_values[finite_sig]))
-
-  for i, level in enumerate(levels):
-    if (not has_finite_sig) or (level < data_min) or (level > data_max):
-      continue
-
-    fig_tmp = plt.figure()
-    try:
-      ax_tmp = fig_tmp.add_subplot(111)
-      with warnings.catch_warnings():
-        warnings.simplefilter('ignore', UserWarning)
-        contour_set = ax_tmp.contour(x_axis, y_axis, safe_sig, levels=[float(level)])
-      segments = []
-      if contour_set.allsegs:
-        for seg in contour_set.allsegs[0]:
-          if seg is None or seg.shape[0] < 2:
-            continue
-          seg_arr = np.asarray(seg[:, :2], dtype=float)
-          keep = np.isfinite(seg_arr).all(axis=1)
-          seg_keep = seg_arr[keep]
-          if seg_keep.shape[0] >= 2:
-            segments.append(seg_keep)
-    finally:
-      plt.close(fig_tmp)
-
-    if not segments:
-      continue
-
-    for j, seg in enumerate(segments):
-      fig.add_trace(go.Scatter(
-        x=seg[:, 0],
-        y=seg[:, 1],
-        mode='lines',
-        hoverinfo='skip',
-        showlegend=(i == 0 and j == 0),
-        name='contours',
-        line={'color': 'black', 'width': 1, 'shape': 'spline', 'smoothing': 1.0}))
-
-    seg_lengths = []
-    for seg in segments:
-      delta = np.diff(seg, axis=0)
-      seg_lengths.append(float(np.sum(np.hypot(delta[:, 0], delta[:, 1]))))
-    longest = segments[int(np.argmax(seg_lengths))]
-
-    delta = np.diff(longest, axis=0)
-    steps = np.hypot(delta[:, 0], delta[:, 1])
-    total = float(np.sum(steps))
-    if total <= 0.0:
-      pt = np.array(longest[longest.shape[0] // 2], dtype=float)
-    else:
-      cum = np.concatenate(([0.0], np.cumsum(steps)))
-      target = 0.5 * total
-      idx = int(np.searchsorted(cum, target, side='right') - 1)
-      idx = min(max(idx, 0), steps.size - 1)
-      span = steps[idx]
-      if span <= 0.0:
-        pt = np.array(longest[idx], dtype=float)
-      else:
-        frac = (target - cum[idx]) / span
-        pt = np.array(longest[idx] + frac * (longest[idx + 1] - longest[idx]), dtype=float)
-
-    if np.all(np.isfinite(pt)):
-      annotations.append({
-        'x': float(pt[0]),
-        'y': float(pt[1]),
-        'text': f'{float(level):.2e}',
-        'showarrow': False,
-        'xanchor': 'center',
-        'yanchor': 'middle',
-        'font': {'size': 10, 'color': 'black'},
-        'bgcolor': 'rgba(255,255,255,0.92)',
-        'borderwidth': 0,
-      })
-
-  eigvals_arr = np.asarray(eigvals).ravel()
-  if eigvals_arr.size > 0:
-    mask = np.isfinite(eigvals_arr.real) & np.isfinite(eigvals_arr.imag)
-    eigvals_arr = eigvals_arr[mask]
-  if eigvals_arr.size > 0:
-    fig.add_trace(go.Scatter(
-      x=eigvals_arr.real,
-      y=eigvals_arr.imag,
-      mode='markers',
-      name='eigenvalues',
-      marker={'size': 2.5, 'color': 'black', 'opacity': 0.65},
-      hovertemplate='Re[lambda]=%{x:.6g}<br>Im[lambda]=%{y:.6g}<extra></extra>'))
+  _add_eigenvalue_overlay(fig, eigvals)
 
   fig.update_layout(
-    title='Pseudospectrum contour (interactive)',
-    xaxis={'title': 'Re[z]', 'tickformat': '.3g', 'constrain': 'domain'},
-    yaxis={'title': 'Im[z]', 'tickformat': '.3g'},
+    title={
+      'text': 'Pseudospectra Heatmap of Resistive MHD Operator',
+      'x': 0.5,
+      'xanchor': 'center',
+      'font': {'size': title_font_size},
+    },
+    xaxis={
+      'title': {'text': 'Re[z]', 'font': {'size': axis_title_font_size}},
+      'tickfont': {'size': axis_tick_font_size},
+      'tickformat': '.3g',
+      'constrain': 'domain',
+      'autorange': False,
+      'range': [x_min, x_max],
+    },
+    yaxis={
+      'title': {'text': 'Im[z]', 'font': {'size': axis_title_font_size}},
+      'tickfont': {'size': axis_tick_font_size},
+      'tickformat': '.3g',
+      'autorange': False,
+      'range': [y_min, y_max],
+    },
     margin={'l': 60, 'r': 200, 'b': 55, 't': 50},
-    legend={'x': 0.01, 'y': 0.99},
-    dragmode='zoom',
-    annotations=annotations)
+    legend={'x': 0.01, 'y': 0.99, 'font': {'size': legend_font_size}},
+    dragmode='zoom')
 
   out_path = os.path.join(output_dir, plot_name)
   fig.write_html(out_path, include_plotlyjs='cdn')
-  print(f'wrote interactive contour: {out_path}', flush=True)
+  print(f'wrote interactive heatmap: {out_path}', flush=True)
+
+
+def pseudo_contours(output_dir, plot_name, R, C, sigmin, eigvals, levels):
+  """Render an interactive, color-coded contour view of pseudospectrum values."""
+  levels = np.asarray(levels, dtype=float).ravel()
+  if levels.size == 0:
+    raise ValueError('levels must contain at least one contour value')
+
+  title_font_size = 20
+  axis_title_font_size = 18
+  axis_tick_font_size = 14
+  colorbar_title_font_size = 18
+  colorbar_tick_font_size = 14
+  contour_label_font_size = 12
+  legend_font_size = 14
+
+  x_axis = np.asarray(R, dtype=float)[0, :]
+  y_axis = np.asarray(C, dtype=float)[:, 0]
+  x_min = float(np.min(x_axis))
+  x_max = float(np.max(x_axis))
+  y_min = float(np.min(y_axis))
+  y_max = float(np.max(y_axis))
+
+  sig_values = np.asarray(sigmin, dtype=float)
+  finite_positive = np.isfinite(sig_values) & (sig_values > 0.0)
+  safe_sig = np.array(sig_values, copy=True)
+  safe_sig[~finite_positive] = np.nan
+
+  fig = go.Figure(go.Contour(
+    x=x_axis,
+    y=y_axis,
+    z=safe_sig,
+    autocontour=True,
+    ncontours=max(3, int(levels.size)),
+    colorscale='Turbo',
+    contours={
+      'showlabels': True,
+      'labelformat': '.2e',
+      'labelfont': {'size': contour_label_font_size, 'color': 'black'},
+      'coloring': 'lines',
+    },
+    line={'width': 2.0},
+    colorbar={
+      'title': {
+        'text': 'ε',
+        'font': {'size': colorbar_title_font_size},
+      },
+      'tickformat': '.2e',
+      'exponentformat': 'e',
+      'showexponent': 'all',
+      'tickfont': {'size': colorbar_tick_font_size},
+      'ticks': '',
+      'ticklen': 0,
+    },
+    hovertemplate='Re[z]=%{x:.6g}<br>Im[z]=%{y:.6g}<br>epsilon=%{z:.4e}<extra></extra>'))
+
+  _add_eigenvalue_overlay(fig, eigvals)
+
+  fig.update_layout(
+    title={
+      'text': 'Pseudospectra Contours of Resistive MHD Operator',
+      'x': 0.5,
+      'xanchor': 'center',
+      'font': {'size': title_font_size},
+    },
+    xaxis={
+      'title': {'text': 'Re[z]', 'font': {'size': axis_title_font_size}},
+      'tickfont': {'size': axis_tick_font_size},
+      'tickformat': '.3g',
+      'constrain': 'domain',
+      'autorange': False,
+      'range': [x_min, x_max],
+    },
+    yaxis={
+      'title': {'text': 'Im[z]', 'font': {'size': axis_title_font_size}},
+      'tickfont': {'size': axis_tick_font_size},
+      'tickformat': '.3g',
+      'autorange': False,
+      'range': [y_min, y_max],
+    },
+    margin={'l': 60, 'r': 200, 'b': 55, 't': 50},
+    legend={'x': 0.01, 'y': 0.99, 'font': {'size': legend_font_size}},
+    dragmode='zoom')
+
+  out_path = os.path.join(output_dir, plot_name)
+  fig.write_html(out_path, include_plotlyjs='cdn')
+  print(f'wrote interactive contours: {out_path}', flush=True)
+
 
 def build_metadata(
   args,
@@ -716,14 +756,22 @@ def run_pipeline(args):
 
   levels = choose_contour_levels(sigmin, min_level=args.min_level, nlevels=args.nlevels)
   print(
-    f'plot_pseudospectrum: levels={np.array2string(levels, precision=3)}, '
+    f'plotting levels={np.array2string(levels, precision=3)}, '
     f'xlim=({real_min:.6g}, {real_max:.6g}), '
     f'ylim=({imag_min:.6g}, {imag_max:.6g})',
     flush=True)
 
-  plot_pseudospectrum(
+  heatmap_plot_name, contour_plot_name = _split_plot_output_names(args.plot_name)
+  pseudo_heatmap(
     args.output_dir,
-    args.plot_name,
+    heatmap_plot_name,
+    R,
+    C,
+    sigmin,
+    eigvals)
+  pseudo_contours(
+    args.output_dir,
+    contour_plot_name,
     R,
     C,
     sigmin,
@@ -734,6 +782,8 @@ def run_pipeline(args):
   plot_info = {
     'enabled': True,
     'plot_name': args.plot_name,
+    'plot_name_heatmap': heatmap_plot_name,
+    'plot_name_contours': contour_plot_name,
   }
   metadata['plot'] = plot_info
 
