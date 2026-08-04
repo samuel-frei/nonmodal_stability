@@ -18,11 +18,14 @@ from scipy import sparse
 from .fields import FIELD_BLOCK_COUNT, write_restart_eigenvectors
 from .matrices import HDF5Matrix, assemble_global
 
-REAL_JACOBIAN_CACHE = './real_jacobian.npy'
-EIGVAL_CACHE = './full_reduced_eigvals.npy'
-EIGVEC_CACHE = './full_reduced_eigvecs.npy'
-SCHUR_CACHE = './full_reduced_schur.npy'
+REAL_JACOBIAN_CACHE = 'real_jacobian.npy'
+EIGVAL_CACHE = 'full_reduced_eigvals.npy'
+EIGVEC_CACHE = 'full_reduced_eigvecs.npy'
+SCHUR_CACHE = 'full_reduced_schur.npy'
+SPECTRUM_PLOT = 'full_reduced_spectrum.png'
+SCHUR_PLOT = 'full_reduced_schur_eigs.png'
 DEFAULT_TIMESTEP = 1e-7
+DEFAULT_CACHE_DIR = '.'
 
 
 def _report_cache_hit(label: str, path: str, shape: tuple[int, ...]) -> None:
@@ -44,11 +47,13 @@ def load_or_compute_jacobian(
   jacobian_path: str,
   massmat_path: str,
   keep_global: NDArray[np.bool_],
+  cache_dir: str = DEFAULT_CACHE_DIR,
 ) -> NDArray[np.float64]:
   """Load the cached reduced operator, or build and cache it from HDF5 matrices."""
+  cache_path = os.path.join(cache_dir, REAL_JACOBIAN_CACHE)
   try:
-    real_jac = np.load(REAL_JACOBIAN_CACHE)
-    _report_cache_hit('reduced Jacobian', REAL_JACOBIAN_CACHE, real_jac.shape)
+    real_jac = np.load(cache_path)
+    _report_cache_hit('reduced Jacobian', cache_path, real_jac.shape)
     return real_jac
   except (FileNotFoundError, OSError, ValueError):
     pass
@@ -83,8 +88,9 @@ def load_or_compute_jacobian(
   identity = np.eye(reduced_jac.shape[0], dtype=solved.dtype)
   real_jac = (solved - identity) / DEFAULT_TIMESTEP
 
-  np.save(REAL_JACOBIAN_CACHE, real_jac)
-  print(f'saved reduced Jacobian cache: {os.path.abspath(REAL_JACOBIAN_CACHE)}', flush=True)
+  os.makedirs(cache_dir, exist_ok=True)
+  np.save(cache_path, real_jac)
+  print(f'saved reduced Jacobian cache: {os.path.abspath(cache_path)}', flush=True)
   return real_jac
 
 
@@ -93,11 +99,13 @@ def load_or_compute_eigvals(
   keep_global: NDArray[np.bool_],
   nr_local: int,
   output_dir: str,
+  cache_dir: str = DEFAULT_CACHE_DIR,
 ) -> NDArray[np.complex128]:
   """Load cached eigenvalues, or compute and cache the spectrum and eigenvectors."""
+  cache_path = os.path.join(cache_dir, EIGVAL_CACHE)
   try:
-    eigvals = np.load(EIGVAL_CACHE)
-    _report_cache_hit('eigenvalues', EIGVAL_CACHE, eigvals.shape)
+    eigvals = np.load(cache_path)
+    _report_cache_hit('eigenvalues', cache_path, eigvals.shape)
     return eigvals
   except (FileNotFoundError, OSError, ValueError):
     pass
@@ -105,15 +113,16 @@ def load_or_compute_eigvals(
   print('computing full eigenvalue spectrum with numpy.linalg.eigvals', flush=True)
   eigvals = np.asarray(np.linalg.eigvals(real_jac), dtype=np.complex128)
   _, eigvecs = sparse.linalg.eigs(real_jac, k=40, ncv=90, which='LM')
-  np.save(EIGVAL_CACHE, eigvals)
-  np.save(EIGVEC_CACHE, eigvecs)
+  os.makedirs(cache_dir, exist_ok=True)
+  np.save(cache_path, eigvals)
+  np.save(os.path.join(cache_dir, EIGVEC_CACHE), eigvecs)
 
   eigvec_dir = os.path.join(output_dir, 'eigvecs_plot')
   write_restart_eigenvectors(eigvecs, keep_global, nr_local, eigvec_dir)
 
   plt.figure()
   plt.scatter(eigvals.real, eigvals.imag, s=2, c='k')
-  plt.savefig('./full_reduced_spectrum.png')
+  plt.savefig(os.path.join(cache_dir, SPECTRUM_PLOT))
   plt.close()
 
   return eigvals
@@ -121,11 +130,13 @@ def load_or_compute_eigvals(
 
 def load_or_compute_schur(
   real_jac: NDArray[np.float64],
+  cache_dir: str = DEFAULT_CACHE_DIR,
 ) -> NDArray[np.complex128]:
   """Load the cached Schur factorisation, or compute and persist it."""
+  cache_path = os.path.join(cache_dir, SCHUR_CACHE)
   try:
-    schur_t = np.load(SCHUR_CACHE)
-    _report_cache_hit('Schur factor', SCHUR_CACHE, schur_t.shape)
+    schur_t = np.load(cache_path)
+    _report_cache_hit('Schur factor', cache_path, schur_t.shape)
     return schur_t
   except (FileNotFoundError, OSError, ValueError):
     pass
@@ -133,9 +144,10 @@ def load_or_compute_schur(
   print('computing schur factorization', flush=True)
   schur_raw, _ = scipy.linalg.schur(real_jac, output='complex')
   schur_t = np.asarray(schur_raw, dtype=np.complex128)
+  os.makedirs(cache_dir, exist_ok=True)
   plt.figure()
   plt.scatter(schur_t.diagonal().real, schur_t.diagonal().imag, s=2, c='k')
-  plt.savefig('./full_reduced_schur_eigs.png')
+  plt.savefig(os.path.join(cache_dir, SCHUR_PLOT))
   plt.close()
-  np.save(SCHUR_CACHE, schur_t)
+  np.save(cache_path, schur_t)
   return schur_t

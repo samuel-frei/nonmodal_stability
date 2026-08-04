@@ -73,15 +73,18 @@ def run_pipeline(args: argparse.Namespace) -> None:
   """Run the end-to-end reduced pseudospectrum workflow."""
   real_min, real_max, imag_min, imag_max = validate_and_normalize_args(args)
 
-  jacobian_path = './lin_ops.h5'
-  massmat_path = './mass_mat.h5'
+  jacobian_path = args.jacobian
+  massmat_path = args.massmat
+  cache_dir = args.cache_dir
   nr_local, keep_global = build_reduction_mapping(jacobian_path)
 
   os.makedirs(args.output_dir, exist_ok=True)
+  os.makedirs(cache_dir, exist_ok=True)
 
-  real_jac = load_or_compute_jacobian(jacobian_path, massmat_path, keep_global)
-  eigvals = load_or_compute_eigvals(real_jac, keep_global, nr_local, args.output_dir)
-  schur_t = load_or_compute_schur(real_jac)
+  real_jac = load_or_compute_jacobian(jacobian_path, massmat_path, keep_global, cache_dir)
+  eigvals = load_or_compute_eigvals(
+    real_jac, keep_global, nr_local, args.output_dir, cache_dir)
+  schur_t = load_or_compute_schur(real_jac, cache_dir)
   del real_jac
 
   print('Running pseudospectrum', flush=True)

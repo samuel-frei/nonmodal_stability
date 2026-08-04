@@ -42,6 +42,11 @@ def build_metadata(
     'run_tag': args.run_tag,
     'case_tag': args.case_tag,
     'slurm_job_id': os.environ.get('SLURM_JOB_ID', ''),
+    'inputs': {
+      'jacobian': os.path.abspath(args.jacobian),
+      'massmat': os.path.abspath(args.massmat),
+      'cache_dir': os.path.abspath(args.cache_dir),
+    },
     'grid_points': int(grid_points_effective),
     'grid_shape': grid_shape,
     'grid_type': grid_type,

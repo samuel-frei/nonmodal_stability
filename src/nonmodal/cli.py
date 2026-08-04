@@ -11,6 +11,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
   parser.add_argument('--grid-points', type=int, default=128,
                       help='Total number of grid points (minimum 128).')
   parser.add_argument('--nprocs', type=int, default=128, help='Worker process count.')
+  parser.add_argument('--jacobian', type=str, default='./lin_ops.h5',
+                      help='HDF5 file holding the /jacobian matrix.')
+  parser.add_argument('--massmat', type=str, default='./mass_mat.h5',
+                      help='HDF5 file holding the /massmat matrix.')
+  parser.add_argument('--cache-dir', type=str, default='.',
+                      help='Directory for the reduced-operator, eigenvalue and Schur caches. '
+                           'Caches are reused by filename alone and are NOT invalidated when '
+                           'inputs change; delete them by hand after changing inputs.')
   parser.add_argument('--grid-npy', type=str, default='',
                       help='Optional .npy file containing a flat complex grid to sample.')
   parser.add_argument('--grid-shape', type=int, nargs=2, metavar=('ROWS', 'COLS'),
