@@ -9,13 +9,18 @@ importing it) is first imported, otherwise they have no effect. Sampling runs a
 `fork` process pool, and unpinned BLAS threads would oversubscribe every core
 against it -- which degrades many-core runs silently rather than erroring. Keep
 these three assignments at the very top of this module, above every import.
+
+`setdefault` rather than plain assignment: pinning to one thread is the right
+default for the parallel sampling path, but a caller who deliberately sets a
+thread count before importing (a notebook doing dense linear algebra, say) has
+made an explicit choice we should not silently override.
 """
 
 import os
 
-os.environ['OMP_NUM_THREADS'] = '1'
-os.environ['MKL_NUM_THREADS'] = '1'
-os.environ['OPENBLAS_NUM_THREADS'] = '1'
+os.environ.setdefault('OMP_NUM_THREADS', '1')
+os.environ.setdefault('MKL_NUM_THREADS', '1')
+os.environ.setdefault('OPENBLAS_NUM_THREADS', '1')
 
 from .fields import (  # noqa: E402
   FIELD_BLOCK_COUNT,
