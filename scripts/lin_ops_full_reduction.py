@@ -217,7 +217,6 @@ def pseudo_heatmap(output_dir, plot_name, R, C, sigmin, eigvals):
   axis_tick_font_size = 14
   colorbar_title_font_size = 18
   colorbar_tick_font_size = 14
-  legend_font_size = 14
 
   x_axis = np.asarray(R, dtype=float)[0, :]
   y_axis = np.asarray(C, dtype=float)[:, 0]
@@ -293,7 +292,6 @@ def pseudo_heatmap(output_dir, plot_name, R, C, sigmin, eigvals):
       'range': [y_min, y_max],
     },
     margin={'l': 60, 'r': 200, 'b': 55, 't': 50},
-    legend={'x': 0.01, 'y': 0.99, 'font': {'size': legend_font_size}},
     dragmode='zoom')
 
   out_path = os.path.join(output_dir, plot_name)
@@ -306,6 +304,15 @@ def pseudo_contours(output_dir, plot_name, R, C, sigmin, eigvals, levels):
   levels = np.asarray(levels, dtype=float).ravel()
   if levels.size == 0:
     raise ValueError('levels must contain at least one contour value')
+  levels = np.unique(np.sort(levels))
+  if levels[0] <= 0.0:
+    raise ValueError('levels must be strictly positive')
+
+  # Keep log-space color progression for wide dynamic range while directly
+  # labeling contour lines in epsilon units.
+  log_levels = np.log10(levels)
+  contour_start = float(log_levels[0])
+  contour_end = float(log_levels[-1])
 
   title_font_size = 20
   axis_title_font_size = 18
@@ -313,7 +320,6 @@ def pseudo_contours(output_dir, plot_name, R, C, sigmin, eigvals, levels):
   colorbar_title_font_size = 18
   colorbar_tick_font_size = 14
   contour_label_font_size = 12
-  legend_font_size = 14
 
   x_axis = np.asarray(R, dtype=float)[0, :]
   y_axis = np.asarray(C, dtype=float)[:, 0]
@@ -326,18 +332,36 @@ def pseudo_contours(output_dir, plot_name, R, C, sigmin, eigvals, levels):
   finite_positive = np.isfinite(sig_values) & (sig_values > 0.0)
   safe_sig = np.array(sig_values, copy=True)
   safe_sig[~finite_positive] = np.nan
+  safe_log_sig = np.array(sig_values, copy=True)
+  safe_log_sig[finite_positive] = np.log10(sig_values[finite_positive])
+  safe_log_sig[~finite_positive] = np.nan
 
-  fig = go.Figure(go.Contour(
+  level_tick_vals = np.unique(np.concatenate(([contour_start, contour_end], log_levels)))
+  level_tick_text = [f'{10.0 ** val:.1e}' for val in level_tick_vals]
+
+  if levels.size == 1:
+    contour_end = float(np.nextafter(contour_start, np.inf))
+    contour_size = float(contour_end - contour_start)
+  else:
+    contour_size = float((contour_end - contour_start) / (levels.size - 1))
+  if contour_size <= 0.0:
+    contour_size = float(np.nextafter(0.0, 1.0))
+
+  fig = go.Figure()
+  fig.add_trace(go.Contour(
     x=x_axis,
     y=y_axis,
-    z=safe_sig,
-    autocontour=True,
-    ncontours=max(3, int(levels.size)),
+    z=safe_log_sig,
+    customdata=safe_sig,
+    zmin=contour_start,
+    zmax=contour_end,
+    autocontour=False,
     colorscale='Turbo',
     contours={
-      'showlabels': True,
-      'labelformat': '.2e',
-      'labelfont': {'size': contour_label_font_size, 'color': 'black'},
+      'start': contour_start,
+      'end': contour_end,
+      'size': contour_size,
+      'showlabels': False,
       'coloring': 'lines',
     },
     line={'width': 2.0},
@@ -346,14 +370,39 @@ def pseudo_contours(output_dir, plot_name, R, C, sigmin, eigvals, levels):
         'text': 'ε',
         'font': {'size': colorbar_title_font_size},
       },
-      'tickformat': '.2e',
-      'exponentformat': 'e',
-      'showexponent': 'all',
+      'tickmode': 'array',
+      'tickvals': level_tick_vals,
+      'ticktext': level_tick_text,
       'tickfont': {'size': colorbar_tick_font_size},
       'ticks': '',
       'ticklen': 0,
     },
-    hovertemplate='Re[z]=%{x:.6g}<br>Im[z]=%{y:.6g}<br>epsilon=%{z:.4e}<extra></extra>'))
+    hovertemplate=(
+      'Re[z]=%{x:.6g}<br>Im[z]=%{y:.6g}<br>'
+      'epsilon=%{customdata:.4e}<br>log10(epsilon)=%{z:.4f}<extra></extra>')))
+
+  # Overlay one contour trace per level to label lines directly in epsilon units.
+  for level in levels:
+    level = float(level)
+    label_end = float(np.nextafter(level, np.inf))
+    label_size = float(max(label_end - level, np.finfo(float).eps))
+    fig.add_trace(go.Contour(
+      x=x_axis,
+      y=y_axis,
+      z=safe_sig,
+      autocontour=False,
+      showscale=False,
+      hoverinfo='skip',
+      contours={
+        'start': level,
+        'end': label_end,
+        'size': label_size,
+        'showlabels': True,
+        'labelformat': '.2e',
+        'labelfont': {'size': contour_label_font_size, 'color': 'black'},
+        'coloring': 'none',
+      },
+      line={'width': 0.0, 'color': 'rgba(0,0,0,0)'}))
 
   _add_eigenvalue_overlay(fig, eigvals)
 
@@ -380,7 +429,6 @@ def pseudo_contours(output_dir, plot_name, R, C, sigmin, eigvals, levels):
       'range': [y_min, y_max],
     },
     margin={'l': 60, 'r': 200, 'b': 55, 't': 50},
-    legend={'x': 0.01, 'y': 0.99, 'font': {'size': legend_font_size}},
     dragmode='zoom')
 
   out_path = os.path.join(output_dir, plot_name)
@@ -394,11 +442,20 @@ def build_metadata(
   real_max,
   imag_min,
   imag_max,
-  rows,
-  cols) -> Dict[str, Any]:
+  grid_points,
+  rows=None,
+  cols=None,
+  grid_type='structured',
+  grid_source='generated') -> Dict[str, Any]:
   """Build structured metadata describing one pseudospectrum run."""
-  grid_points_effective = int(rows) * int(cols)
+  grid_points_effective = int(grid_points)
   effective_workers = _worker_count(grid_points_effective, args.nprocs)
+  grid_shape = None
+  if rows is not None and cols is not None:
+    grid_shape = {
+      'rows': int(rows),
+      'cols': int(cols),
+    }
 
   metadata = {
     'created_utc': datetime.now(timezone.utc).isoformat(timespec='seconds').replace('+00:00', 'Z'),
@@ -408,10 +465,10 @@ def build_metadata(
     'case_tag': args.case_tag,
     'slurm_job_id': os.environ.get('SLURM_JOB_ID', ''),
     'grid_points': int(grid_points_effective),
-    'grid_shape': {
-      'rows': int(rows),
-      'cols': int(cols),
-    },
+    'grid_shape': grid_shape,
+    'grid_type': grid_type,
+    'grid_source': grid_source,
+    'grid_npy': args.grid_npy or '',
     'nprocs_requested': int(args.nprocs),
     'nprocs_effective': int(effective_workers),
     'bounds': {
@@ -502,7 +559,7 @@ def compute_pseudospectrum(
 
   return R, C, sigmin
 
-def choose_contour_levels(sigmin, min_level=1e-5, nlevels=5):
+def choose_contour_levels(sigmin, min_level=1e-7, nlevels=5):
   """Choose positive contour levels spanning available pseudospectrum values."""
   if nlevels < 1:
     raise ValueError('nlevels must be >= 1')
@@ -577,17 +634,21 @@ def parse_args() -> argparse.Namespace:
   parser = argparse.ArgumentParser(description='Compute reduced pseudospectrum and save outputs.')
   parser.add_argument('--grid-points', type=int, default=128, help='Total number of grid points (minimum 128).')
   parser.add_argument('--nprocs', type=int, default=128, help='Worker process count.')
-  parser.add_argument('--real-min', type=float, required=True,
-                      help='Sampled real-axis minimum.')
-  parser.add_argument('--real-max', type=float, required=True,
-                      help='Sampled real-axis maximum.')
-  parser.add_argument('--imag-min', type=float, required=True,
-                      help='Sampled imaginary-axis minimum.')
-  parser.add_argument('--imag-max', type=float, required=True,
-                      help='Sampled imaginary-axis maximum.')
-  parser.add_argument('--nlevels', type=int, default=8,
+  parser.add_argument('--grid-npy', type=str, default='',
+                      help='Optional .npy file containing a flat complex grid to sample.')
+  parser.add_argument('--grid-shape', type=int, nargs=2, metavar=('ROWS', 'COLS'),
+                      help='Optional reshape for structured plots when using --grid-npy.')
+  parser.add_argument('--real-min', type=float, default=None,
+                      help='Sampled real-axis minimum (required unless --grid-npy is used).')
+  parser.add_argument('--real-max', type=float, default=None,
+                      help='Sampled real-axis maximum (required unless --grid-npy is used).')
+  parser.add_argument('--imag-min', type=float, default=None,
+                      help='Sampled imaginary-axis minimum (required unless --grid-npy is used).')
+  parser.add_argument('--imag-max', type=float, default=None,
+                      help='Sampled imaginary-axis maximum (required unless --grid-npy is used).')
+  parser.add_argument('--nlevels', type=int, default=16,
                       help='Number of contour levels for interactive pseudospectrum plot.')
-  parser.add_argument('--min-level', type=float, default=1e-5, help='Minimum contour level.')
+  parser.add_argument('--min-level', type=float, default=1e-7, help='Minimum contour level.')
   parser.add_argument('--plot-name', type=str, default='pseudoplot_default.html',
                       help='Interactive contour plot output filename.')
   parser.add_argument('--run-tag', type=str, default='', help='Batch-level run identifier for metadata tracking.')
@@ -607,17 +668,55 @@ def validate_and_normalize_args(args) -> Tuple[float, float, float, float]:
   if args.min_level <= 0.0:
     raise ValueError('min-level must be positive')
 
-  real_min = args.real_min
-  real_max = args.real_max
-  imag_min = args.imag_min
-  imag_max = args.imag_max
-  if real_max <= real_min or imag_max <= imag_min:
-    raise ValueError(
-      'region to cover must be prescribed with strict bounds: '
-      '--real-max > --real-min and --imag-max > --imag-min')
+  if args.grid_npy:
+    if args.grid_shape is not None:
+      rows, cols = args.grid_shape
+      if rows < 1 or cols < 1:
+        raise ValueError('grid-shape rows and cols must be >= 1')
+    real_min = None
+    real_max = None
+    imag_min = None
+    imag_max = None
+  else:
+    real_min = args.real_min
+    real_max = args.real_max
+    imag_min = args.imag_min
+    imag_max = args.imag_max
+    if real_min is None or real_max is None or imag_min is None or imag_max is None:
+      raise ValueError('real/imag bounds must be provided unless --grid-npy is used')
+    if real_max <= real_min or imag_max <= imag_min:
+      raise ValueError(
+        'region to cover must be prescribed with strict bounds: '
+        '--real-max > --real-min and --imag-max > --imag-min')
 
   args.plot_name = _normalize_html_name(args.plot_name, 'plot-name')
   return real_min, real_max, imag_min, imag_max
+
+
+def load_flat_grid_npy(path: str) -> np.ndarray:
+  """Load a flat complex grid from a .npy file."""
+  zz = np.load(path, allow_pickle=False)
+  if zz.size == 0:
+    raise ValueError('grid-npy must contain at least one complex value')
+  zz = np.asarray(zz).ravel()
+  if not np.iscomplexobj(zz):
+    zz = zz.astype(np.complex128)
+  return zz
+
+
+def grid_bounds_from_flat(zz_flat: np.ndarray) -> Tuple[float, float, float, float]:
+  """Compute real/imag bounds from a flat complex grid."""
+  real_min = float(np.min(zz_flat.real))
+  real_max = float(np.max(zz_flat.real))
+  imag_min = float(np.min(zz_flat.imag))
+  imag_max = float(np.max(zz_flat.imag))
+  return real_min, real_max, imag_min, imag_max
+
+
+def save_pseudospectrum_flat(output_dir, zz_flat, sigmin_flat):
+  """Save flat complex grid and pseudospectrum values as NumPy arrays."""
+  np.save(os.path.join(output_dir, 'pseudo_z.npy'), zz_flat)
+  np.save(os.path.join(output_dir, 'pseudo_sigmin_flat.npy'), sigmin_flat)
 
 
 def load_or_build_jacobian(jacobian_path, massmat_path, keep_global):
@@ -730,65 +829,108 @@ def run_pipeline(args):
   del real_jac
 
   print('Running pseudospectrum', flush=True)
-  R, C, sigmin = compute_pseudospectrum(
-    schur_t,
-    grid_points=args.grid_points,
-    nprocs=args.nprocs,
-    real_min=real_min,
-    real_max=real_max,
-    imag_min=imag_min,
-    imag_max=imag_max)
+  plot_enabled = True
+  if args.grid_npy:
+    zz_flat = load_flat_grid_npy(args.grid_npy)
+    real_min, real_max, imag_min, imag_max = grid_bounds_from_flat(zz_flat)
+    sigmin_flat = _compute_sigmin_points(
+      zz_flat,
+      schur_t,
+      nprocs=args.nprocs,
+      progress_label='pseudospectrum points')
+    if args.grid_shape is None:
+      plot_enabled = False
+      R = None
+      C = None
+      sigmin = sigmin_flat
+      rows = None
+      cols = None
+    else:
+      rows, cols = args.grid_shape
+      if rows * cols != zz_flat.size:
+        raise ValueError('grid-shape does not match the size of grid-npy')
+      z_grid = zz_flat.reshape(rows, cols)
+      R = z_grid.real
+      C = z_grid.imag
+      sigmin = sigmin_flat.reshape(rows, cols)
+    grid_points = int(zz_flat.size)
+    grid_type = 'structured' if plot_enabled else 'unstructured'
+    grid_source = 'npy'
+  else:
+    R, C, sigmin = compute_pseudospectrum(
+      schur_t,
+      grid_points=args.grid_points,
+      nprocs=args.nprocs,
+      real_min=real_min,
+      real_max=real_max,
+      imag_min=imag_min,
+      imag_max=imag_max)
+    rows, cols = int(sigmin.shape[0]), int(sigmin.shape[1])
+    grid_points = int(rows * cols)
+    grid_type = 'structured'
+    grid_source = 'generated'
 
   del schur_t
 
-  rows, cols = int(sigmin.shape[0]), int(sigmin.shape[1])
   metadata = build_metadata(
     args,
     real_min,
     real_max,
     imag_min,
     imag_max,
+    grid_points=grid_points,
     rows=rows,
-    cols=cols)
+    cols=cols,
+    grid_type=grid_type,
+    grid_source=grid_source)
 
-  if go is None:
-    raise ImportError('plotly is required for interactive plots; install plotly')
+  if plot_enabled:
+    if go is None:
+      raise ImportError('plotly is required for interactive plots; install plotly')
 
-  levels = choose_contour_levels(sigmin, min_level=args.min_level, nlevels=args.nlevels)
-  print(
-    f'plotting levels={np.array2string(levels, precision=3)}, '
-    f'xlim=({real_min:.6g}, {real_max:.6g}), '
-    f'ylim=({imag_min:.6g}, {imag_max:.6g})',
-    flush=True)
+    levels = choose_contour_levels(sigmin, min_level=args.min_level, nlevels=args.nlevels)
+    print(
+      f'plotting levels={np.array2string(levels, precision=3)}, '
+      f'xlim=({real_min:.6g}, {real_max:.6g}), '
+      f'ylim=({imag_min:.6g}, {imag_max:.6g})',
+      flush=True)
 
-  heatmap_plot_name, contour_plot_name = _split_plot_output_names(args.plot_name)
-  pseudo_heatmap(
-    args.output_dir,
-    heatmap_plot_name,
-    R,
-    C,
-    sigmin,
-    eigvals)
-  pseudo_contours(
-    args.output_dir,
-    contour_plot_name,
-    R,
-    C,
-    sigmin,
-    eigvals,
-    levels)
+    heatmap_plot_name, contour_plot_name = _split_plot_output_names(args.plot_name)
+    pseudo_heatmap(
+      args.output_dir,
+      heatmap_plot_name,
+      R,
+      C,
+      sigmin,
+      eigvals)
+    pseudo_contours(
+      args.output_dir,
+      contour_plot_name,
+      R,
+      C,
+      sigmin,
+      eigvals,
+      levels)
 
-  metadata['levels']['values'] = [float(v) for v in np.asarray(levels, dtype=float).ravel()]
-  plot_info = {
-    'enabled': True,
-    'plot_name': args.plot_name,
-    'plot_name_heatmap': heatmap_plot_name,
-    'plot_name_contours': contour_plot_name,
-  }
-  metadata['plot'] = plot_info
+    metadata['levels']['values'] = [float(v) for v in np.asarray(levels, dtype=float).ravel()]
+    plot_info = {
+      'enabled': True,
+      'plot_name': args.plot_name,
+      'plot_name_heatmap': heatmap_plot_name,
+      'plot_name_contours': contour_plot_name,
+    }
+    metadata['plot'] = plot_info
+  else:
+    metadata['plot'] = {
+      'enabled': False,
+      'reason': 'unstructured grid; provide --grid-shape to enable plots',
+    }
 
   write_metadata(args.output_dir, metadata)
-  save_pseudospectrum_arrays(args.output_dir, R, C, sigmin)
+  if plot_enabled:
+    save_pseudospectrum_arrays(args.output_dir, R, C, sigmin)
+  else:
+    save_pseudospectrum_flat(args.output_dir, zz_flat, sigmin)
 
 
 def main():
