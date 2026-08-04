@@ -101,9 +101,22 @@ the block layout lives in `fields.py` rather than a vendor-named module.
 
 ## Testing approach
 
-The load-bearing test is exact, not golden-file: for a diagonal (already Schur-form)
-operator, `sigma_min(zI - T) = min_i |z - T_ii|` in closed form, so the LAPACK/eigsh
-path is verified analytically on both the mirrored and full-grid branches.
+Tests are analytic or reference-based, never golden-file.
+
+1. **Synthetic** ([test_pseudospectrum.py](tests/test_pseudospectrum.py)) — for a diagonal
+   (already Schur-form) operator, `sigma_min(zI - T) = min_i |z - T_ii|` in closed form,
+   verified on both the mirrored and full-grid branches.
+2. **Real matrices** ([test_matrixmarket.py](tests/test_matrixmarket.py)) — NIST Matrix
+   Market matrices spanning exactly normal (`bcsstk01`) to strongly non-normal
+   (`west0479`), checked against a dense SVD of `zI - T` (agrees to ~1e-12) and against
+   `sigma_min <= dist(z, spectrum)`, a theorem. `bcsstk01` is symmetric hence normal, so
+   that bound is an equality there. The non-normal cases additionally assert a *strict*
+   gap, so a bug returning eigenvalue distances would not pass.
+
+`tests/matrixmarket.py` handles fetching: pinned sha256 per matrix, disk cache, and
+`urllib` needs an explicit `User-Agent` because math.nist.gov 403s the default one.
+Missing downloads **skip** unless `NONMODAL_TEST_REQUIRE_DOWNLOADS=1` (CI sets it).
+Use `-m "not network"` to exclude them entirely; `NONMODAL_TEST_DATA` relocates the cache.
 
 `tests/conftest.py` forces the Agg backend — `operator.py` imports pyplot at module
 scope.

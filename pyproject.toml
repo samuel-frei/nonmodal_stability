@@ -48,6 +48,14 @@ ignore = ["E741"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+markers = [
+    "network: downloads a matrix from the NIST Matrix Market (cached; skipped when offline)",
+]
+filterwarnings = [
+    # scipy.io.mmread warns that its default return type is changing in 1.20.
+    # The loader handles both sparse and dense returns already.
+    "ignore:The default value for `spmatrix`:DeprecationWarning",
+]
 
 [tool.mypy]
 python_version = "3.14"

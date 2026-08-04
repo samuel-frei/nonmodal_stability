@@ -42,3 +42,6 @@ wheels/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+
+# Matrices downloaded from the NIST Matrix Market by the test suite.
+tests/_data/

@@ -134,6 +134,25 @@ Two behaviours worth knowing:
 uv run ruff check . && uv run mypy && uv run pytest
 ```
 
+### Test matrices
+
+Part of the suite validates the sampler against real matrices downloaded from
+the [NIST Matrix Market](https://math.nist.gov/MatrixMarket/) — spanning exactly
+normal (`bcsstk01`) to strongly non-normal (`west0479`, the classic
+pseudospectra example). They are checked against a dense SVD of `zI - T`, and
+against the identity `sigma_min(zI - A) = dist(z, spectrum)` that holds exactly
+for normal matrices and strictly fails otherwise.
+
+Downloads are checksum-verified and cached, so the suite runs offline once
+warmed. On a machine that has never fetched them and has no network, these tests
+**skip** rather than fail.
+
+```bash
+uv run pytest -m "not network"      # never touch the network
+NONMODAL_TEST_DATA=/shared/mm uv run pytest   # cache elsewhere
+NONMODAL_TEST_REQUIRE_DOWNLOADS=1 uv run pytest   # treat a failed download as an error (CI does this)
+```
+
 ## Repository layout
 
 ```
