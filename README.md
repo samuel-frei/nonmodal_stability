@@ -68,9 +68,8 @@ different requirements. `run` needs the HDF5 matrices and a machine with cores;
 
 ```bash
 # On the cluster, from a directory containing the input files.
-# Omit the bounds entirely and the region is inferred from the spectrum.
-uv run nonmodal run --grid-points 3200 --nprocs 32 \
-  --real-min -9e6 --real-max 5e5 --imag-min -3e6 --imag-max 3e6
+# Start coarse, then spend the rest of the budget refining onto features.
+uv run nonmodal run --grid-nx 24 --grid-ny 24 --refine-points 2600 --nprocs 32
 
 # Anywhere afterwards -- no HDF5, no operator, no caches:
 uv run nonmodal plot --output-dir pseudospectrum --min-level 1e-7 --nlevels 16
@@ -79,30 +78,32 @@ uv run nonmodal plot --output-dir pseudospectrum --min-level 1e-7 --nlevels 16
 `python -m nonmodal` works identically. See `cases/harris_linear_20x6z/ps1.sbatch`
 for a portable SLURM template.
 
-Instead of rectangular bounds you can supply a precomputed set of complex points
-with `--grid-npy points.npy` — a flat complex array. Samples are unstructured
+You can also supply a precomputed set of complex points with
+`--grid-npy points.npy` — a flat complex array. Samples are unstructured
 throughout, so no shape is needed.
 
 ### Sampling
 
-**Omit all four bounds and the region is inferred** from the computed spectrum,
-padded by `--bounds-pad` (default 0.3 of the spectral span) and logged. Give all
-four to pin it explicitly. Giving only some is an error — a half-specified
-region is far more likely to be a slip than a request to infer the rest.
+**The region always comes from the spectrum.** There is no way to hand-pick a
+rectangle: this tool is built to start at low resolution and zoom in on
+features, not to sweep a chosen box at high resolution. `--bounds-pad`
+(default 0.3 of the spectral span) sets how much room to leave around the
+eigenvalues, and the box it picks is logged.
 
-`--grid-points` is a budget of `sigma_min` evaluations, split into a near-square
-lattice; `--grid-nx` / `--grid-ny` set the shape directly.
+**Resolution is asked for as dimensions, not a total.** `--grid-nx` and
+`--grid-ny` give the initial lattice (default 24x24). Keep it coarse.
+
+**`--refine-points N` is how you reach resolution.** It spends `N` further
+evaluations on top of the initial grid, inserting them where a linear
+interpolant of `log10(sigma_min)` is worst — which is exactly the error the
+contour plot shows. Against a dense-SVD reference at equal total cost this
+roughly halves interpolation error on a strongly non-normal operator (2.05x on
+`west0479`) and is about a wash on nearly-normal ones, so it is off by default.
+`--refine-rounds` (default 4) sets how many passes to spread those points over.
 
 If the reduced operator is real — it is — its spectrum is conjugate-symmetric,
 so only the upper half-plane is evaluated and the rest follows by conjugation.
 `--no-half-plane` disables that.
-
-`--refine-rounds N` enables adaptive refinement: seed a coarse set, triangulate,
-and insert points into the triangles where a linear interpolant of
-`log10(sigma_min)` is worst. Measured against a dense-SVD reference at equal
-budget, this roughly halves interpolation error on a strongly non-normal
-operator (2.05x on `west0479`) and is roughly a wash on nearly-normal ones, so
-it is **off by default**.
 
 ### Outputs
 
@@ -163,19 +164,19 @@ points = uniform_points(Bounds(-9e6, 5e5, -3e6, 3e6), nx=64, ny=64)
 sigmin = sample_sigmin(points, schur_t, nprocs=16)
 ```
 
-`compute_pseudospectrum` wraps that for the common rectangular case and returns
-`(R, C, sigmin)` meshes ready for contouring:
+`compute_pseudospectrum` wraps that for the rectangular case, returning
+`(R, C, sigmin)` meshes ready for contouring. The pipeline does not use it — it
+samples flat and refines — but it is convenient when you genuinely want a fixed
+lattice:
 
 ```python
-from nonmodal import HDF5Matrix, build_reduction_mapping, compute_pseudospectrum
-
-nr_local, keep_global = build_reduction_mapping('lin_ops.h5')
-jac = HDF5Matrix('lin_ops.h5', '/jacobian')
+from nonmodal import Bounds, compute_pseudospectrum
 
 R, C, sigmin = compute_pseudospectrum(
-    schur_t, grid_points=1024, nprocs=16,
-    real_min=-9e6, real_max=5e5, imag_min=-3e6, imag_max=3e6)
+    schur_t, Bounds(-9e6, 5e5, -3e6, 3e6), nx=32, ny=32, nprocs=16)
 ```
+
+`Bounds.around_spectrum(eigvals, pad=0.3)` builds the same region `run` uses.
 
 The package ships `py.typed`.
 

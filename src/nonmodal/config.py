@@ -8,10 +8,10 @@ so an invalid run fails before any matrix is loaded.
 from dataclasses import dataclass, field
 
 from .operator import DEFAULT_TIMESTEP
-from .refine import DEFAULT_SEED_FRACTION
 from .sampling import PointSource
 
 DEFAULT_N_EIGVECS = 40
+DEFAULT_REFINE_ROUNDS = 4
 DEFAULT_NLEVELS = 16
 DEFAULT_MIN_LEVEL = 1e-7
 DEFAULT_PLOT_MESH = 400
@@ -27,8 +27,12 @@ class RunConfig:
   cache_dir: str = '.'
   output_dir: str = 'pseudospectrum'
   nprocs: int = 128
-  refine_rounds: int = 0
-  refine_seed_fraction: float = DEFAULT_SEED_FRACTION
+  #: Extra evaluations refinement may spend on top of the initial grid.
+  #: Zero disables refinement.
+  refine_points: int = 0
+  #: How many rounds to spread `refine_points` over. More rounds adapt more
+  #: closely, at one worker-pool round trip each.
+  refine_rounds: int = DEFAULT_REFINE_ROUNDS
   #: Force full-plane sampling even when the operator is real. Half-plane
   #: sampling is otherwise chosen automatically from the operator itself.
   force_full_plane: bool = False
@@ -43,10 +47,10 @@ class RunConfig:
   def __post_init__(self) -> None:
     if self.nprocs < 1:
       raise ValueError('nprocs must be >= 1')
-    if self.refine_rounds < 0:
-      raise ValueError('refine-rounds must be >= 0')
-    if not 0.0 < self.refine_seed_fraction <= 1.0:
-      raise ValueError('refine-seed-fraction must satisfy 0 < value <= 1')
+    if self.refine_points < 0:
+      raise ValueError('refine-points must be >= 0')
+    if self.refine_rounds < 1:
+      raise ValueError('refine-rounds must be >= 1')
     if self.timestep <= 0.0:
       raise ValueError('timestep must be positive')
     if self.n_eigvecs < 1:

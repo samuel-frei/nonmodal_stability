@@ -18,59 +18,49 @@ from .config import (
   DEFAULT_MIN_LEVEL,
   DEFAULT_N_EIGVECS,
   DEFAULT_NLEVELS,
+  DEFAULT_REFINE_ROUNDS,
   PlotConfig,
   RunConfig,
 )
 from .operator import DEFAULT_TIMESTEP
 from .pipeline import plot_run, run_pipeline
-from .refine import DEFAULT_SEED_FRACTION
 from .sampling import (
   DEFAULT_BOUNDS_PAD,
-  Bounds,
+  DEFAULT_GRID_NX,
+  DEFAULT_GRID_NY,
   FileSource,
   PointSource,
-  RectangularSource,
   SpectrumSource,
-  near_square,
 )
-
-BOUND_FLAGS = ('real_min', 'real_max', 'imag_min', 'imag_max')
 
 
 def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
-  grid = parser.add_argument_group('sampling region')
-  grid.add_argument('--grid-points', type=int, default=128,
-                    help='Total number of sigma_min evaluations, split into a '
-                         'near-square lattice. Use --grid-nx/--grid-ny for an '
-                         'explicit shape.')
-  grid.add_argument('--grid-nx', type=int, default=None,
-                    help='Lattice columns; overrides --grid-points.')
-  grid.add_argument('--grid-ny', type=int, default=None,
-                    help='Lattice rows; overrides --grid-points.')
-  grid.add_argument('--real-min', type=float, default=None,
-                    help='Sampled real-axis minimum. Omit all four bounds to '
-                         'infer the region from the spectrum.')
-  grid.add_argument('--real-max', type=float, default=None,
-                    help='Sampled real-axis maximum.')
-  grid.add_argument('--imag-min', type=float, default=None,
-                    help='Sampled imaginary-axis minimum.')
-  grid.add_argument('--imag-max', type=float, default=None,
-                    help='Sampled imaginary-axis maximum.')
+  grid = parser.add_argument_group('initial grid')
+  grid.add_argument('--grid-nx', type=int, default=DEFAULT_GRID_NX,
+                    help=f'Columns in the initial lattice (default '
+                         f'{DEFAULT_GRID_NX}). Keep it coarse and spend the rest '
+                         f'of the budget on --refine-points.')
+  grid.add_argument('--grid-ny', type=int, default=DEFAULT_GRID_NY,
+                    help=f'Rows in the initial lattice (default {DEFAULT_GRID_NY}).')
   grid.add_argument('--bounds-pad', type=float, default=DEFAULT_BOUNDS_PAD,
-                    help='Padding around the spectrum when bounds are inferred, '
-                         'as a fraction of the spectral span.')
+                    help='Padding around the spectrum, as a fraction of the '
+                         'spectral span. The sampled region is always derived '
+                         'from the spectrum.')
   grid.add_argument('--grid-npy', type=str, default='',
-                    help='Optional .npy file of flat complex points to sample, '
-                         'instead of a rectangular region.')
+                    help='Optional .npy file of flat complex points to sample '
+                         'instead of the spectrum-derived lattice.')
 
   refine = parser.add_argument_group('adaptive refinement')
-  refine.add_argument('--refine-rounds', type=int, default=0,
-                      help='Refinement rounds (0 disables it, the default). '
-                           'Measurably beats uniform sampling on strongly '
-                           'non-normal operators, roughly a wash otherwise.')
-  refine.add_argument('--refine-seed-fraction', type=float,
-                      default=DEFAULT_SEED_FRACTION,
-                      help='Fraction of the budget spent on the initial seed.')
+  refine.add_argument('--refine-points', type=int, default=0,
+                      help='Extra evaluations to spend refining onto features, on '
+                           'top of the initial grid (0 disables refinement). This '
+                           'is the intended way to reach resolution: it measurably '
+                           'beats sampling a finer uniform lattice on strongly '
+                           'non-normal operators.')
+  refine.add_argument('--refine-rounds', type=int, default=DEFAULT_REFINE_ROUNDS,
+                      help=f'Rounds to spread --refine-points over (default '
+                           f'{DEFAULT_REFINE_ROUNDS}). More rounds adapt more '
+                           f'closely, at one worker-pool round trip each.')
 
   op = parser.add_argument_group('operator')
   op.add_argument('--jacobian', type=str, default='./lin_ops.h5',
@@ -139,60 +129,45 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
   return build_parser().parse_args(argv)
 
 
-def _lattice_shape(args: argparse.Namespace) -> tuple[int, int]:
-  """Resolve the lattice shape from a budget or an explicit nx/ny."""
-  if (args.grid_nx is None) != (args.grid_ny is None):
-    raise ValueError('give both --grid-nx and --grid-ny, or neither')
-  if args.grid_nx is not None:
-    return int(args.grid_nx), int(args.grid_ny)
-  if args.grid_points < 1:
-    raise ValueError('grid-points must be >= 1')
-  return near_square(args.grid_points)
-
-
 def _point_source(args: argparse.Namespace) -> PointSource:
   """Choose where to sample from.
 
-  Explicit bounds win. Omitting all four infers the region from the spectrum
-  once it has been computed. Giving only some is an error: a half-specified
-  region is far more likely to be a mistake than a request to infer the rest.
+  The region always comes from the spectrum -- there is no way to hand-pick a
+  rectangle, because this tool is meant to start coarse and refine onto
+  features rather than sweep a chosen box at high resolution. `--grid-npy`
+  remains the escape hatch for a point set built elsewhere.
   """
-  given = {f'--{name.replace("_", "-")}': getattr(args, name) for name in BOUND_FLAGS}
-  missing = [name for name, value in given.items() if value is None]
-
   if args.grid_npy:
-    # A supplied point set fixes the region and the count, so anything that
-    # would shape a lattice is inert.
-    inert = [name for name, value in given.items() if value is not None]
-    if args.grid_nx is not None or args.grid_ny is not None:
-      inert.append('--grid-nx/--grid-ny')
+    # A supplied point set fixes both the region and the resolution, so the
+    # lattice and padding flags cannot take effect.
+    inert = [
+      flag for flag, given in (
+        ('--grid-nx', args.grid_nx != DEFAULT_GRID_NX),
+        ('--grid-ny', args.grid_ny != DEFAULT_GRID_NY),
+        ('--bounds-pad', args.bounds_pad != DEFAULT_BOUNDS_PAD))
+      if given
+    ]
     if inert:
       raise ValueError(
         f'--grid-npy supplies the sample points, so {", ".join(inert)} '
         'would have no effect')
     return FileSource(args.grid_npy)
 
-  nx, ny = _lattice_shape(args)
-
-  if len(missing) == len(given):
-    return SpectrumSource(nx, ny, pad=args.bounds_pad)
-  if missing:
-    raise ValueError(
-      'give all four real/imag bounds, or none of them to infer the region '
-      f'from the spectrum; missing {", ".join(missing)}')
-
-  bounds = Bounds(args.real_min, args.real_max, args.imag_min, args.imag_max)
-  return RectangularSource(bounds, nx, ny)
+  return SpectrumSource(args.grid_nx, args.grid_ny, pad=args.bounds_pad)
 
 
 def run_config_from_args(args: argparse.Namespace) -> RunConfig:
   """Resolve parsed arguments into a `RunConfig`."""
   source = _point_source(args)
 
-  if args.refine_rounds > 0 and not isinstance(source, RectangularSource | SpectrumSource):
+  if args.refine_points > 0 and isinstance(source, FileSource):
     raise ValueError(
-      '--refine-rounds needs a rectangular region to grow into; it cannot '
-      'refine the fixed point set given by --grid-npy')
+      '--refine-points needs a lattice to grow from; it cannot refine the '
+      'fixed point set given by --grid-npy')
+  if args.refine_points < 1 and args.refine_rounds != DEFAULT_REFINE_ROUNDS:
+    raise ValueError(
+      '--refine-rounds only divides up --refine-points, which is 0, so it '
+      'would have no effect')
 
   return RunConfig(
     source=source,
@@ -201,8 +176,8 @@ def run_config_from_args(args: argparse.Namespace) -> RunConfig:
     cache_dir=args.cache_dir,
     output_dir=args.output_dir,
     nprocs=args.nprocs,
+    refine_points=args.refine_points,
     refine_rounds=args.refine_rounds,
-    refine_seed_fraction=args.refine_seed_fraction,
     force_full_plane=args.no_half_plane,
     timestep=DEFAULT_TIMESTEP if args.timestep is None else args.timestep,
     n_eigvecs=DEFAULT_N_EIGVECS if args.n_eigvecs is None else args.n_eigvecs,

@@ -3,6 +3,11 @@
 Sample sets are flat arrays of complex points -- never meshes. Structure is
 reintroduced only at plotting time, by triangulating or interpolating. That
 keeps one representation through the whole pipeline instead of two.
+
+The initial grid is deliberately coarse and always derived from the spectrum:
+this tool is for starting at low resolution and refining onto features, not for
+sampling a hand-picked rectangle at high resolution. Resolution is therefore
+asked for as explicit `nx` by `ny` dimensions rather than a point total.
 """
 
 from dataclasses import dataclass
@@ -23,8 +28,8 @@ class Bounds:
   def __post_init__(self) -> None:
     if self.real_max <= self.real_min or self.imag_max <= self.imag_min:
       raise ValueError(
-        'region to cover must be prescribed with strict bounds: '
-        '--real-max > --real-min and --imag-max > --imag-min')
+        f'bounds must be strictly ordered, got real [{self.real_min}, '
+        f'{self.real_max}], imag [{self.imag_min}, {self.imag_max}]')
 
   @classmethod
   def around_spectrum(
@@ -56,19 +61,6 @@ class Bounds:
     }
 
 
-def near_square(n_points: int) -> tuple[int, int]:
-  """Split a point budget into a near-square (nx, ny).
-
-  Rounds rather than factorising: the old factor-pair approach made the shape
-  depend on the arithmetic of the total, so 128 became 8x16 and a prime like
-  127 became 1x127.
-  """
-  if n_points < 1:
-    raise ValueError('n_points must be >= 1')
-  side = max(1, int(round(np.sqrt(n_points))))
-  return side, side
-
-
 def uniform_points(bounds: Bounds, nx: int, ny: int) -> NDArray[np.complex128]:
   """A flat uniform lattice covering `bounds`, including its edges."""
   if nx < 1 or ny < 1:
@@ -77,15 +69,6 @@ def uniform_points(bounds: Bounds, nx: int, ny: int) -> NDArray[np.complex128]:
   y = np.linspace(bounds.imag_min, bounds.imag_max, ny)
   X, Y = np.meshgrid(x, y)
   return np.asarray((X + 1j * Y).ravel(), dtype=np.complex128)
-
-
-def upper_half(bounds: Bounds) -> Bounds:
-  """Restrict a box to the closed upper half-plane.
-
-  Used with `mirror_conjugates` when the operator is real. Sampling only
-  Im z >= 0 halves the work, and the lower half follows by conjugation.
-  """
-  return Bounds(bounds.real_min, bounds.real_max, 0.0, max(bounds.imag_max, 1e-12))
 
 
 def mirror_conjugates(
@@ -115,15 +98,16 @@ def load_flat_grid_npy(path: str) -> NDArray[np.complex128]:
 
 
 DEFAULT_BOUNDS_PAD = 0.3
+DEFAULT_GRID_NX = 24
+DEFAULT_GRID_NY = 24
 
 
 @dataclass(frozen=True)
 class RectangularSource:
   """Sample a uniform lattice of `nx` by `ny` points over a box.
 
-  The shape is explicit rather than derived from a total, so a caller who wants
-  a non-square lattice over a non-square region can ask for one. `near_square`
-  turns a point budget into a shape at the CLI boundary.
+  Dimensions are always explicit: a point total would have to be factored back
+  into a shape, and the answer would depend on the arithmetic of the number.
   """
 
   bounds: Bounds

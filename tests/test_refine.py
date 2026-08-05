@@ -1,14 +1,13 @@
 """Adaptive refinement: the error indicator, the budget, and degenerate input."""
 
 import numpy as np
-import pytest
 import scipy.linalg
 from scipy.interpolate import LinearNDInterpolator
 from scipy.spatial import Delaunay
 
 from nonmodal.pseudospectrum import sample_sigmin
-from nonmodal.refine import refine, seed_count, triangle_errors
-from nonmodal.sampling import Bounds, near_square, uniform_points
+from nonmodal.refine import refine, triangle_errors
+from nonmodal.sampling import Bounds, uniform_points
 
 
 def _xy(z: np.ndarray) -> np.ndarray:
@@ -35,13 +34,6 @@ def test_triangle_errors_reward_large_triangles() -> None:
 
   assert (triangle_errors(large, values, simplices)
           > triangle_errors(small, values, simplices))
-
-
-def test_seed_count_is_a_fraction_with_a_floor() -> None:
-  assert seed_count(1000, 0.35) == 350
-  assert seed_count(10, 0.35) == 16  # floor keeps a triangulable seed
-  with pytest.raises(ValueError, match='seed_fraction'):
-    seed_count(100, 0.0)
 
 
 def _peaked_field(z: np.ndarray) -> np.ndarray:
@@ -157,14 +149,14 @@ def test_adaptive_beats_uniform_at_equal_budget() -> None:
     assert covered.mean() > 0.99, 'sample hull should cover the reference mesh'
     return float(np.abs(got[covered] - truth[covered]).mean())
 
+  # Equal budget: a 20x20 uniform lattice, versus a coarse 12x12 start plus the
+  # same number of extra evaluations spent adaptively.
   budget = 400
 
-  nx, ny = near_square(budget)
-  z_uniform = uniform_points(bounds, nx, ny)
+  z_uniform = uniform_points(bounds, 20, 20)
   err_uniform = interp_error(z_uniform, sample_sigmin(z_uniform, T, 2))
 
-  sx, sy = near_square(seed_count(budget))
-  z_seed = uniform_points(bounds, sx, sy)
+  z_seed = uniform_points(bounds, 12, 12)
   z_adaptive, s_adaptive = refine(
     z_seed, sample_sigmin(z_seed, T, 2),
     lambda batch: sample_sigmin(batch, T, 2), budget=budget, rounds=4)

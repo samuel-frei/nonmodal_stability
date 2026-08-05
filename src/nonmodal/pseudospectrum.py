@@ -19,7 +19,7 @@ import scipy
 from numpy.typing import NDArray
 from scipy import sparse
 
-from .sampling import Bounds, near_square, uniform_points
+from .sampling import Bounds, uniform_points
 
 #: Inherited by fork workers; set by `sample_sigmin` in the parent.
 _worker_T: NDArray[np.complexfloating] | None = None
@@ -135,35 +135,25 @@ def sample_sigmin(
 
 def compute_pseudospectrum(
   imat: NDArray[np.complexfloating],
-  grid_points: int = 128,
+  bounds: Bounds,
+  nx: int,
+  ny: int,
   nprocs: int = 10,
-  real_min: float | None = None,
-  real_max: float | None = None,
-  imag_min: float | None = None,
-  imag_max: float | None = None,
-  nx: int | None = None,
-  ny: int | None = None,
 ) -> tuple[NDArray[np.float64], NDArray[np.float64], NDArray[np.float64]]:
-  """Sample a uniform rectangular grid and return it as a mesh.
+  """Sample a uniform `nx` by `ny` grid over `bounds`, returned as meshes.
 
-  A convenience wrapper over `sample_sigmin` for the common rectangular case,
-  returning `(R, C, sigmin)` meshes ready for contouring. `grid_points` is
-  split into a near-square `(nx, ny)`; pass `nx`/`ny` to control the shape
-  directly.
+  A convenience over `sample_sigmin` for the rectangular case, giving
+  `(R, C, sigmin)` ready for contouring. The pipeline itself does not use this:
+  it samples flat and refines. This is for library callers who genuinely want a
+  fixed lattice, and for tests that compare against a reference on one.
 
   `imat` must already be in Schur (upper-triangular) form.
   """
-  if real_min is None or real_max is None or imag_min is None or imag_max is None:
-    raise ValueError('real/imag bounds must all be provided')
-  bounds = Bounds(real_min, real_max, imag_min, imag_max)
-
-  if nx is None or ny is None:
-    nx, ny = near_square(grid_points)
-
   points = uniform_points(bounds, nx, ny)
   print(
-    f'computing pseudospectrum on Re[z] in [{real_min:.6g}, {real_max:.6g}] '
-    f'and Im[z] in [{imag_min:.6g}, {imag_max:.6g}] with shape=({ny},{nx})',
+    f'computing pseudospectrum on Re[z] in '
+    f'[{bounds.real_min:.6g}, {bounds.real_max:.6g}] and Im[z] in '
+    f'[{bounds.imag_min:.6g}, {bounds.imag_max:.6g}] with shape=({ny},{nx})',
     flush=True)
 
   sigmin = sample_sigmin(points, imat, nprocs)

@@ -20,14 +20,8 @@ from .plotting import (
   pseudo_heatmap,
 )
 from .pseudospectrum import _worker_count, choose_contour_levels, sample_sigmin
-from .refine import refine, seed_count
-from .sampling import (
-  Bounds,
-  RectangularSource,
-  ResolvedSource,
-  mirror_conjugates,
-  near_square,
-)
+from .refine import refine
+from .sampling import Bounds, ResolvedSource, mirror_conjugates
 
 
 def _sample(
@@ -36,37 +30,28 @@ def _sample(
   schur_t: NDArray[np.complexfloating],
   half_plane: bool,
 ) -> tuple[NDArray[np.complex128], NDArray[np.float64]]:
-  """Build the sample set and evaluate it, refining if asked.
+  """Evaluate the coarse initial grid, then refine onto features if asked.
 
   Kept separate from `run_pipeline` so the Schur factor -- the largest array in
   the run -- can be released as soon as sampling is done.
   """
-  refining = config.refine_rounds > 0 and isinstance(source, RectangularSource)
-  budget = source.n_points if isinstance(source, RectangularSource) else 0
-
-  if refining and isinstance(source, RectangularSource):
-    # Refinement spends only part of the budget on the seed and grows into the
-    # rest; without this the source would build the whole budget up front and
-    # leave refinement nothing to do.
-    seed_nx, seed_ny = near_square(
-      seed_count(budget, config.refine_seed_fraction))
-    source = RectangularSource(source.bounds, seed_nx, seed_ny)
-
   points = source.build()
   if half_plane:
     points = points[points.imag >= 0.0]
 
   sigmin = sample_sigmin(points, schur_t, config.nprocs)
-  if not refining:
+  if config.refine_points < 1:
     return points, sigmin
 
   def sample(batch: NDArray[np.complex128]) -> NDArray[np.float64]:
     return sample_sigmin(batch, schur_t, config.nprocs, 'refinement points')
 
-  # Half-plane sampling already halved the point count, so halve the target too:
-  # the budget counts evaluations, not plotted points.
-  target = budget // 2 if half_plane else budget
-  return refine(points, sigmin, sample, budget=target, rounds=config.refine_rounds)
+  # refine_points counts evaluations added on top of whatever the initial grid
+  # cost, so half-plane sampling needs no adjustment here.
+  return refine(
+    points, sigmin, sample,
+    budget=points.size + config.refine_points,
+    rounds=config.refine_rounds)
 
 
 def run_pipeline(config: RunConfig) -> None:

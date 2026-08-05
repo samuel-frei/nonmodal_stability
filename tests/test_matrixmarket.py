@@ -28,7 +28,7 @@ from matrixmarket import (
 )
 from numpy.typing import NDArray
 
-from nonmodal import compute_pseudospectrum
+from nonmodal import Bounds, compute_pseudospectrum
 
 pytestmark = pytest.mark.network
 
@@ -59,7 +59,7 @@ def _prepared(name: str) -> tuple[NDArray[np.complex128], NDArray[np.complex128]
 
 def _spectrum_bounds(
   eigvals: NDArray[np.complex128], pad: float = 0.35, symmetric: bool = True
-) -> tuple[float, float, float, float]:
+) -> Bounds:
   """A padded box around the spectrum.
 
   Padding keeps sample points off the eigenvalues, where sigma_min collapses
@@ -72,12 +72,12 @@ def _spectrum_bounds(
   p = pad * span
   imag_extent = float(np.abs(eigvals.imag).max()) + p
   if symmetric:
-    return (float(eigvals.real.min()) - p, float(eigvals.real.max()) + p,
-            -imag_extent, imag_extent)
+    return Bounds(float(eigvals.real.min()) - p, float(eigvals.real.max()) + p,
+                  -imag_extent, imag_extent)
   # An off-centre box, to check nothing depends on the region straddling the
   # real axis symmetrically.
-  return (float(eigvals.real.min()) - p, float(eigvals.real.max()) + p,
-          -imag_extent, 0.83 * imag_extent)
+  return Bounds(float(eigvals.real.min()) - p, float(eigvals.real.max()) + p,
+                -imag_extent, 0.83 * imag_extent)
 
 
 def _dense_sigmin_reference(
@@ -100,11 +100,10 @@ def test_sigmin_matches_dense_svd(name: str) -> None:
   """The trtrs/eigsh path must reproduce a dense SVD of zI - T."""
   spec: MatrixSpec = MATRICES[name]
   eigvals, T = _prepared(name)
-  rmin, rmax, imin, imax = _spectrum_bounds(eigvals)
+  bounds = _spectrum_bounds(eigvals)
 
   R, C, sigmin = compute_pseudospectrum(
-    T, grid_points=16, nprocs=2,
-    real_min=rmin, real_max=rmax, imag_min=imin, imag_max=imax)
+    T, bounds, nx=4, ny=4, nprocs=2)
 
   reference = _dense_sigmin_reference(R + 1j * C, T)
   np.testing.assert_allclose(sigmin, reference, rtol=spec.svd_rtol)
@@ -120,11 +119,10 @@ def test_normal_matrix_sigmin_equals_distance_to_spectrum() -> None:
   spec = MATRICES['bcsstk01']
   assert spec.symmetric
   eigvals, T = _prepared('bcsstk01')
-  rmin, rmax, imin, imax = _spectrum_bounds(eigvals)
+  bounds = _spectrum_bounds(eigvals)
 
   R, C, sigmin = compute_pseudospectrum(
-    T, grid_points=25, nprocs=2,
-    real_min=rmin, real_max=rmax, imag_min=imin, imag_max=imax)
+    T, bounds, nx=5, ny=5, nprocs=2)
 
   distance = _distance_to_spectrum(R + 1j * C, eigvals)
   np.testing.assert_allclose(sigmin, distance, rtol=1e-3)
@@ -138,11 +136,10 @@ def test_resolvent_lower_bound_holds(name: str) -> None:
   so a violation beyond round-off means the sampled values are wrong.
   """
   eigvals, T = _prepared(name)
-  rmin, rmax, imin, imax = _spectrum_bounds(eigvals)
+  bounds = _spectrum_bounds(eigvals)
 
   R, C, sigmin = compute_pseudospectrum(
-    T, grid_points=16, nprocs=2,
-    real_min=rmin, real_max=rmax, imag_min=imin, imag_max=imax)
+    T, bounds, nx=4, ny=4, nprocs=2)
 
   distance = _distance_to_spectrum(R + 1j * C, eigvals)
   assert np.all(sigmin <= distance * (1.0 + 1e-3))
@@ -156,11 +153,10 @@ def test_nonnormality_produces_a_strict_gap(name: str) -> None:
   other check here.
   """
   eigvals, T = _prepared(name)
-  rmin, rmax, imin, imax = _spectrum_bounds(eigvals)
+  bounds = _spectrum_bounds(eigvals)
 
   R, C, sigmin = compute_pseudospectrum(
-    T, grid_points=16, nprocs=2,
-    real_min=rmin, real_max=rmax, imag_min=imin, imag_max=imax)
+    T, bounds, nx=4, ny=4, nprocs=2)
 
   ratio = sigmin / _distance_to_spectrum(R + 1j * C, eigvals)
   assert ratio.min() < 0.9, f'{name} shows no non-normal amplification'
@@ -170,11 +166,10 @@ def test_off_centre_region_matches_dense_svd() -> None:
   """A region not centred on the real axis must sample just as accurately."""
   spec = MATRICES['gre__115']
   eigvals, T = _prepared('gre__115')
-  rmin, rmax, imin, imax = _spectrum_bounds(eigvals, symmetric=False)
+  bounds = _spectrum_bounds(eigvals, symmetric=False)
 
   R, C, sigmin = compute_pseudospectrum(
-    T, grid_points=16, nprocs=2,
-    real_min=rmin, real_max=rmax, imag_min=imin, imag_max=imax)
+    T, bounds, nx=4, ny=4, nprocs=2)
 
   reference = _dense_sigmin_reference(R + 1j * C, T)
   np.testing.assert_allclose(sigmin, reference, rtol=spec.svd_rtol)

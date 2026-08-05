@@ -16,7 +16,7 @@ from nonmodal.pseudospectrum import (
   compute_pseudospectrum,
   sample_sigmin,
 )
-from nonmodal.sampling import mirror_conjugates
+from nonmodal.sampling import Bounds, mirror_conjugates
 
 
 def _exact_sigmin(
@@ -27,39 +27,27 @@ def _exact_sigmin(
   return np.min(np.abs(Z[..., None] - diag[None, None, :]), axis=-1)
 
 
-def test_sigmin_matches_closed_form_on_mirrored_grid() -> None:
-  # Conjugate-symmetric spectrum, so mirroring the upper half-plane is valid.
+def test_sigmin_matches_closed_form_on_a_centred_grid() -> None:
   diag = np.array([1 + 0.5j, 1 - 0.5j, -2 + 1j, -2 - 1j], dtype=np.complex128)
   R, C, sigmin = compute_pseudospectrum(
-    np.diag(diag), grid_points=16, nprocs=1,
-    real_min=-4.0, real_max=4.0, imag_min=-3.0, imag_max=3.0)
+    np.diag(diag), Bounds(-4.0, 4.0, -3.0, 3.0), nx=4, ny=4, nprocs=1)
 
   np.testing.assert_allclose(sigmin, _exact_sigmin(R, C, diag), rtol=1e-8)
 
 
-def test_sigmin_matches_closed_form_on_full_grid() -> None:
-  # Asymmetric imaginary bounds force full-grid evaluation, so an arbitrary
-  # (non-conjugate-symmetric) spectrum is fair game here.
+def test_sigmin_matches_closed_form_off_centre() -> None:
+  # compute_pseudospectrum never mirrors, so an arbitrary (non-conjugate-
+  # symmetric) spectrum over an off-centre box is fair game.
   diag = np.array([1 + 0.5j, -2 + 1j, 0.5 - 1.5j, 3 + 0j], dtype=np.complex128)
   R, C, sigmin = compute_pseudospectrum(
-    np.diag(diag), grid_points=16, nprocs=1,
-    real_min=-4.0, real_max=4.0, imag_min=-3.0, imag_max=2.5)
+    np.diag(diag), Bounds(-4.0, 4.0, -3.0, 2.5), nx=4, ny=4, nprocs=1)
 
   np.testing.assert_allclose(sigmin, _exact_sigmin(R, C, diag), rtol=1e-8)
 
 
-def test_compute_pseudospectrum_requires_bounds() -> None:
-  T = np.diag([1 + 0j, 2 + 0j]).astype(np.complex128)
-  with pytest.raises(ValueError, match='bounds must all be provided'):
-    compute_pseudospectrum(T, grid_points=4, nprocs=1, real_min=-1.0, real_max=1.0)
-
-
-def test_compute_pseudospectrum_rejects_inverted_bounds() -> None:
-  T = np.diag([1 + 0j, 2 + 0j]).astype(np.complex128)
-  with pytest.raises(ValueError, match='strict bounds'):
-    compute_pseudospectrum(
-      T, grid_points=4, nprocs=1,
-      real_min=1.0, real_max=-1.0, imag_min=-1.0, imag_max=1.0)
+def test_bounds_reject_inverted_regions() -> None:
+  with pytest.raises(ValueError, match='strictly ordered'):
+    Bounds(1.0, -1.0, -1.0, 1.0)
 
 
 @pytest.mark.parametrize(

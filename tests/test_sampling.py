@@ -10,32 +10,14 @@ from nonmodal.sampling import (
   SpectrumSource,
   load_flat_grid_npy,
   mirror_conjugates,
-  near_square,
   uniform_points,
-  upper_half,
 )
-
-
-@pytest.mark.parametrize(
-  ('total', 'expected'),
-  [(16, (4, 4)), (100, (10, 10)), (128, (11, 11)), (127, (11, 11)), (1, (1, 1))],
-)
-def test_near_square_rounds_instead_of_factoring(
-  total: int, expected: tuple[int, int]
-) -> None:
-  # The old _grid_shape factorised, so 128 -> 8x16 and a prime 127 -> 1x127.
-  assert near_square(total) == expected
-
-
-def test_near_square_rejects_empty() -> None:
-  with pytest.raises(ValueError, match='n_points must be >= 1'):
-    near_square(0)
 
 
 def test_bounds_reject_inverted() -> None:
-  with pytest.raises(ValueError, match='strict bounds'):
+  with pytest.raises(ValueError, match='strictly ordered'):
     Bounds(1.0, -1.0, -1.0, 1.0)
-  with pytest.raises(ValueError, match='strict bounds'):
+  with pytest.raises(ValueError, match='strictly ordered'):
     Bounds(-1.0, 1.0, 1.0, -1.0)
 
 
@@ -70,12 +52,6 @@ def test_uniform_points_covers_corners() -> None:
   assert z.real.max() == pytest.approx(1.0)
   assert z.imag.min() == pytest.approx(-2.0)
   assert z.imag.max() == pytest.approx(2.0)
-
-
-def test_upper_half_clips_to_nonnegative_imaginary() -> None:
-  b = upper_half(Bounds(-1.0, 1.0, -2.0, 2.0))
-  assert b.imag_min == 0.0
-  assert b.imag_max == 2.0
 
 
 def test_mirror_conjugates_reflects_without_duplicating_the_axis() -> None:

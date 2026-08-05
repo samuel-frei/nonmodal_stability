@@ -126,11 +126,17 @@ the block layout lives in `fields.py` rather than a vendor-named module.
   `--levels`), because silently dropping a flag on a two-day job is worse than failing.
 - **`--timestep` defines the operator**, so it must match the simulation that exported
   the Jacobian. The caches do *not* key on it — change it and delete them by hand.
-- **Bounds are inferred when all four are omitted** (`SpectrumSource`), which requires
-  the spectrum, so sources are only concrete after `resolve(eigvals)`. That is why
-  every source has a `resolve` returning a `ResolvedSource` — it keeps the pipeline
-  from branching on which kind it got.
-- **Adaptive refinement is opt-in** (`--refine-rounds`, default 0). Measured: 2.05x
+- **The region is always derived from the spectrum.** There is no flag for explicit
+  bounds: the tool is for starting coarse and refining onto features, not sweeping a
+  chosen box. Inference needs the spectrum, so sources are only concrete after
+  `resolve(eigvals)` — every source has one, returning a `ResolvedSource`, which keeps
+  the pipeline from branching on which kind it got.
+- **Resolution comes from refinement, not a finer lattice.** `--grid-nx`/`--grid-ny`
+  set a coarse initial grid; `--refine-points N` spends N *extra* evaluations on top of
+  it. There is deliberately no total-points flag and no `near_square` — a total would
+  have to be factored back into a shape, and the answer would depend on the arithmetic
+  of the number (the old code turned 128 into 8x16 and 127 into 1x127).
+- **Adaptive refinement is opt-in** (`--refine-points`, default 0). Measured: 2.05x
   lower interpolation error than uniform at equal budget on `west0479`, roughly a wash
   on nearly-normal matrices. Contour-targeted weighting was tried and measured *worse*
   in every case, so it was dropped — do not re-add it without evidence.

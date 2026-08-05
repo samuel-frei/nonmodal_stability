@@ -59,7 +59,6 @@ from .sampling import (  # noqa: E402
   SpectrumSource,
   load_flat_grid_npy,
   mirror_conjugates,
-  near_square,
   uniform_points,
 )
 
@@ -89,7 +88,6 @@ __all__ = [
   'load_or_compute_schur',
   'load_samples',
   'mirror_conjugates',
-  'near_square',
   'plot_run',
   'pseudo_contours',
   'pseudo_heatmap',

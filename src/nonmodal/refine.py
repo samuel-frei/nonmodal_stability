@@ -1,7 +1,9 @@
 """Error-driven adaptive refinement of a sample set.
 
-Seed a coarse point set, triangulate it, and repeatedly insert points into the
-triangles where a linear interpolant of log10(sigma_min) is worst.
+Take the coarse initial grid, triangulate it, and repeatedly insert points into
+the triangles where a linear interpolant of log10(sigma_min) is worst. This is
+the intended way to reach resolution: start coarse, then spend evaluations only
+where the field actually varies.
 
 Why this indicator: contours are drawn by linearly interpolating over a Delaunay
 triangulation (see plotting.py), so `area * spread(log10 sigma_min)` estimates
@@ -10,8 +12,7 @@ scale-free across the many orders of magnitude sigma_min covers.
 
 Measured against a dense-SVD reference at equal point budget, this beats uniform
 sampling by ~2x on a strongly non-normal operator (west0479, normality defect
-0.63) and is roughly a wash on nearly-normal ones. It is therefore opt-in:
-`rounds=0` leaves the seed set untouched.
+0.63) and is roughly a wash on nearly-normal ones.
 """
 
 from collections.abc import Callable
@@ -19,9 +20,6 @@ from collections.abc import Callable
 import numpy as np
 from numpy.typing import NDArray
 from scipy.spatial import Delaunay, QhullError
-
-#: Fraction of the point budget spent on the initial uniform seed.
-DEFAULT_SEED_FRACTION = 0.35
 
 Sampler = Callable[[NDArray[np.complex128]], NDArray[np.float64]]
 
@@ -97,9 +95,3 @@ def refine(
 
   return points, sigmin
 
-
-def seed_count(budget: int, seed_fraction: float = DEFAULT_SEED_FRACTION) -> int:
-  """How many points to spend on the initial uniform seed."""
-  if not 0.0 < seed_fraction <= 1.0:
-    raise ValueError('seed_fraction must satisfy 0 < value <= 1')
-  return max(16, int(seed_fraction * budget))
