@@ -61,6 +61,7 @@ def load_or_compute_jacobian(
   massmat_path: str,
   keep_global: NDArray[np.bool_],
   cache_dir: str = DEFAULT_CACHE_DIR,
+  timestep: float = DEFAULT_TIMESTEP,
 ) -> NDArray[np.float64]:
   """Load the cached reduced operator, or build and cache it from HDF5 matrices."""
   cached = _load_cached(cache_dir, REAL_JACOBIAN_CACHE, 'reduced Jacobian')
@@ -95,7 +96,7 @@ def load_or_compute_jacobian(
   solved = sparse.linalg.spsolve(reduced_jac, reduced_mmat.toarray())
   solved = np.asarray(solved)
   identity = np.eye(reduced_jac.shape[0], dtype=solved.dtype)
-  real_jac = (solved - identity) / DEFAULT_TIMESTEP
+  real_jac = (solved - identity) / timestep
 
   _save_cached(cache_dir, REAL_JACOBIAN_CACHE, real_jac)
   return real_jac
@@ -107,6 +108,7 @@ def load_or_compute_eigvals(
   nr_local: int,
   output_dir: str,
   cache_dir: str = DEFAULT_CACHE_DIR,
+  n_eigvecs: int = 40,
 ) -> NDArray[np.complex128]:
   """Load cached eigenvalues, or compute and cache the spectrum and eigenvectors."""
   cached = _load_cached(cache_dir, EIGVAL_CACHE, 'eigenvalues')
@@ -115,7 +117,9 @@ def load_or_compute_eigvals(
 
   print('computing full eigenvalue spectrum with numpy.linalg.eigvals', flush=True)
   eigvals = np.asarray(np.linalg.eigvals(real_jac), dtype=np.complex128)
-  _, eigvecs = sparse.linalg.eigs(real_jac, k=40, ncv=90, which='LM')
+  # ncv is ARPACK's subspace size; it must exceed k with room to converge.
+  ncv = min(real_jac.shape[0], max(2 * n_eigvecs + 10, 20))
+  _, eigvecs = sparse.linalg.eigs(real_jac, k=n_eigvecs, ncv=ncv, which='LM')
   _save_cached(cache_dir, EIGVAL_CACHE, eigvals)
   _save_cached(cache_dir, EIGVEC_CACHE, eigvecs)
 

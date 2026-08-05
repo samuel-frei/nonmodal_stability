@@ -119,6 +119,17 @@ the block layout lives in `fields.py` rather than a vendor-named module.
 - **`eigsh` gets a fixed `v0`** (`_start_vector`). ARPACK otherwise randomises the start
   vector, which made runs irreproducible and intermittently failed a tolerance on the
   ill-conditioned `bcsstk01`. Do not remove it to "simplify" the call.
+- **The CLI is kept 1-1 with the config objects.** Every `RunConfig`/`PlotConfig`
+  field has a flag, and every flag reaches a field — there is an audit for this in
+  `tests/test_cli.py`. Flags that *cannot* take effect in a given mode are rejected
+  rather than ignored (`--refine-rounds` with `--grid-npy`, `--nlevels` with
+  `--levels`), because silently dropping a flag on a two-day job is worse than failing.
+- **`--timestep` defines the operator**, so it must match the simulation that exported
+  the Jacobian. The caches do *not* key on it — change it and delete them by hand.
+- **Bounds are inferred when all four are omitted** (`SpectrumSource`), which requires
+  the spectrum, so sources are only concrete after `resolve(eigvals)`. That is why
+  every source has a `resolve` returning a `ResolvedSource` — it keeps the pipeline
+  from branching on which kind it got.
 - **Adaptive refinement is opt-in** (`--refine-rounds`, default 0). Measured: 2.05x
   lower interpolation error than uniform at equal budget on `west0479`, roughly a wash
   on nearly-normal matrices. Contour-targeted weighting was tried and measured *worse*

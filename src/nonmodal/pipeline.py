@@ -21,11 +21,18 @@ from .plotting import (
 )
 from .pseudospectrum import _worker_count, choose_contour_levels, sample_sigmin
 from .refine import refine, seed_count
-from .sampling import Bounds, RectangularSource, mirror_conjugates
+from .sampling import (
+  Bounds,
+  RectangularSource,
+  ResolvedSource,
+  mirror_conjugates,
+  near_square,
+)
 
 
 def _sample(
   config: RunConfig,
+  source: ResolvedSource,
   schur_t: NDArray[np.complexfloating],
   half_plane: bool,
 ) -> tuple[NDArray[np.complex128], NDArray[np.float64]]:
@@ -34,7 +41,6 @@ def _sample(
   Kept separate from `run_pipeline` so the Schur factor -- the largest array in
   the run -- can be released as soon as sampling is done.
   """
-  source = config.source
   refining = config.refine_rounds > 0 and isinstance(source, RectangularSource)
   budget = source.n_points if isinstance(source, RectangularSource) else 0
 
@@ -42,7 +48,9 @@ def _sample(
     # Refinement spends only part of the budget on the seed and grows into the
     # rest; without this the source would build the whole budget up front and
     # leave refinement nothing to do.
-    source = RectangularSource(source.bounds, seed_count(budget))
+    seed_nx, seed_ny = near_square(
+      seed_count(budget, config.refine_seed_fraction))
+    source = RectangularSource(source.bounds, seed_nx, seed_ny)
 
   points = source.build()
   if half_plane:
@@ -68,9 +76,10 @@ def run_pipeline(config: RunConfig) -> None:
   os.makedirs(config.cache_dir, exist_ok=True)
 
   real_jac = load_or_compute_jacobian(
-    config.jacobian, config.massmat, keep_global, config.cache_dir)
+    config.jacobian, config.massmat, keep_global, config.cache_dir, config.timestep)
   eigvals = load_or_compute_eigvals(
-    real_jac, keep_global, nr_local, config.output_dir, config.cache_dir)
+    real_jac, keep_global, nr_local, config.output_dir, config.cache_dir,
+    config.n_eigvecs)
   # A real operator has a conjugate-symmetric spectrum, so the lower half-plane
   # is redundant. This is the actual mathematical precondition, checked on the
   # operator rather than inferred from the shape of the sample set.
@@ -78,7 +87,10 @@ def run_pipeline(config: RunConfig) -> None:
   schur_t = load_or_compute_schur(real_jac, config.cache_dir)
   del real_jac
 
-  points, sigmin = _sample(config, schur_t, half_plane)
+  # Bounds may be inferred from the spectrum, so the source is only concrete
+  # once the eigenvalues exist.
+  source = config.source.resolve(eigvals)
+  points, sigmin = _sample(config, source, schur_t, half_plane)
   del schur_t
 
   n_evaluated = int(points.size)

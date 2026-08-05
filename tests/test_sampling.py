@@ -7,6 +7,7 @@ from nonmodal.sampling import (
   Bounds,
   FileSource,
   RectangularSource,
+  SpectrumSource,
   load_flat_grid_npy,
   mirror_conjugates,
   near_square,
@@ -89,11 +90,46 @@ def test_mirror_conjugates_reflects_without_duplicating_the_axis() -> None:
   assert ms[-1] == pytest.approx(10.0)
 
 
-def test_rectangular_source_builds_its_budget() -> None:
-  src = RectangularSource(Bounds(-1.0, 1.0, -1.0, 1.0), 25)
+def test_rectangular_source_builds_its_lattice() -> None:
+  src = RectangularSource(Bounds(-1.0, 1.0, -1.0, 1.0), 5, 5)
   z = src.build()
-  assert z.size == 25
+  assert z.size == src.n_points == 25
   assert src.describe()['kind'] == 'rectangular'
+
+
+def test_rectangular_source_allows_non_square_lattices() -> None:
+  src = RectangularSource(Bounds(-4.0, 4.0, -1.0, 1.0), nx=16, ny=4)
+  assert src.build().size == src.n_points == 64
+
+
+def test_rectangular_source_rejects_empty_lattice() -> None:
+  with pytest.raises(ValueError, match='grid-nx and grid-ny must be >= 1'):
+    RectangularSource(Bounds(-1.0, 1.0, -1.0, 1.0), 0, 5)
+
+
+def test_spectrum_source_resolves_against_a_spectrum() -> None:
+  eigvals = np.array([1 + 2j, -3 - 1j], dtype=np.complex128)
+  src = SpectrumSource(nx=6, ny=6, pad=0.5)
+  assert src.describe()['kind'] == 'spectrum'
+
+  resolved = src.resolve(eigvals)
+  assert isinstance(resolved, RectangularSource)
+  assert (resolved.nx, resolved.ny) == (6, 6)
+  # The inferred box encloses the spectrum it was derived from.
+  assert resolved.bounds.real_min < eigvals.real.min()
+  assert resolved.bounds.real_max > eigvals.real.max()
+
+
+def test_concrete_sources_resolve_to_themselves() -> None:
+  eigvals = np.array([1 + 0j], dtype=np.complex128)
+  rect = RectangularSource(Bounds(-1.0, 1.0, -1.0, 1.0), 3, 3)
+  assert rect.resolve(eigvals) is rect
+  assert FileSource('g.npy').resolve(eigvals) == FileSource('g.npy')
+
+
+def test_spectrum_source_rejects_negative_pad() -> None:
+  with pytest.raises(ValueError, match='bounds-pad must be >= 0'):
+    SpectrumSource(nx=4, ny=4, pad=-0.1)
 
 
 def test_file_source_round_trip(tmp_path) -> None:

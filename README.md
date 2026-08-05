@@ -67,7 +67,8 @@ different requirements. `run` needs the HDF5 matrices and a machine with cores;
 `plot` needs only a finished output directory.
 
 ```bash
-# On the cluster, from a directory containing the input files:
+# On the cluster, from a directory containing the input files.
+# Omit the bounds entirely and the region is inferred from the spectrum.
 uv run nonmodal run --grid-points 3200 --nprocs 32 \
   --real-min -9e6 --real-max 5e5 --imag-min -3e6 --imag-max 3e6
 
@@ -84,7 +85,13 @@ throughout, so no shape is needed.
 
 ### Sampling
 
-`--grid-points` is a budget of `sigma_min` evaluations, not a grid shape.
+**Omit all four bounds and the region is inferred** from the computed spectrum,
+padded by `--bounds-pad` (default 0.3 of the spectral span) and logged. Give all
+four to pin it explicitly. Giving only some is an error — a half-specified
+region is far more likely to be a slip than a request to infer the rest.
+
+`--grid-points` is a budget of `sigma_min` evaluations, split into a near-square
+lattice; `--grid-nx` / `--grid-ny` set the shape directly.
 
 If the reduced operator is real — it is — its spectrum is conjugate-symmetric,
 so only the upper half-plane is evaluated and the rest follows by conjugation.

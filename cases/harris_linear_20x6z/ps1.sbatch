@@ -32,6 +32,7 @@ srun ${RUN} run \
   --case-tag harris_linear_20x6z \
   --real-min -9.0e6 --real-max 5.0e5 \
   --imag-min -3.0e6 --imag-max 3.0e6 \
+  --timestep 1e-7 \
   --jacobian ./lin_ops.h5 \
   --massmat ./mass_mat.h5 \
   --cache-dir . \
@@ -46,3 +47,7 @@ srun ${RUN} run \
 # Add `--refine-rounds 4` to the run above to concentrate samples where the
 # field varies. It measurably beats uniform sampling on strongly non-normal
 # operators and is roughly a wash otherwise, so it is off by default.
+#
+# The bounds above are pinned deliberately, for reproducibility. Dropping all
+# four makes the run infer the region from the spectrum instead, padded by
+# --bounds-pad -- handy for a first look at an unfamiliar case.

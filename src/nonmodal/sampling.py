@@ -114,19 +114,39 @@ def load_flat_grid_npy(path: str) -> NDArray[np.complex128]:
   return np.asarray(zz, dtype=np.complex128)
 
 
+DEFAULT_BOUNDS_PAD = 0.3
+
+
 @dataclass(frozen=True)
 class RectangularSource:
-  """Sample a uniform lattice over a box."""
+  """Sample a uniform lattice of `nx` by `ny` points over a box.
+
+  The shape is explicit rather than derived from a total, so a caller who wants
+  a non-square lattice over a non-square region can ask for one. `near_square`
+  turns a point budget into a shape at the CLI boundary.
+  """
 
   bounds: Bounds
-  n_points: int
+  nx: int
+  ny: int
+
+  def __post_init__(self) -> None:
+    if self.nx < 1 or self.ny < 1:
+      raise ValueError('grid-nx and grid-ny must be >= 1')
+
+  @property
+  def n_points(self) -> int:
+    return self.nx * self.ny
+
+  def resolve(self, eigvals: NDArray[np.complexfloating]) -> RectangularSource:
+    return self
 
   def build(self) -> NDArray[np.complex128]:
-    nx, ny = near_square(self.n_points)
-    return uniform_points(self.bounds, nx, ny)
+    return uniform_points(self.bounds, self.nx, self.ny)
 
   def describe(self) -> dict[str, object]:
     return {'kind': 'rectangular', 'n_points': int(self.n_points),
+            'nx': int(self.nx), 'ny': int(self.ny),
             'bounds': self.bounds.as_dict()}
 
 
@@ -136,6 +156,9 @@ class FileSource:
 
   path: str
 
+  def resolve(self, eigvals: NDArray[np.complexfloating]) -> FileSource:
+    return self
+
   def build(self) -> NDArray[np.complex128]:
     return load_flat_grid_npy(self.path)
 
@@ -143,5 +166,45 @@ class FileSource:
     return {'kind': 'file', 'path': self.path}
 
 
-#: Either source builds a flat complex array, so the pipeline never branches.
-PointSource = RectangularSource | FileSource
+@dataclass(frozen=True)
+class SpectrumSource:
+  """Sample a box inferred from the operator's own spectrum.
+
+  Used when no bounds are given. It cannot build points on its own -- the
+  spectrum is not known until the operator has been factorised -- so it becomes
+  a `RectangularSource` via `resolve` once eigenvalues are in hand.
+  """
+
+  nx: int
+  ny: int
+  pad: float = DEFAULT_BOUNDS_PAD
+
+  def __post_init__(self) -> None:
+    if self.nx < 1 or self.ny < 1:
+      raise ValueError('grid-nx and grid-ny must be >= 1')
+    if self.pad < 0.0:
+      raise ValueError('bounds-pad must be >= 0')
+
+  @property
+  def n_points(self) -> int:
+    return self.nx * self.ny
+
+  def resolve(self, eigvals: NDArray[np.complexfloating]) -> RectangularSource:
+    bounds = Bounds.around_spectrum(eigvals, pad=self.pad)
+    print(
+      f'inferred sampling region from the spectrum (pad={self.pad:g}): '
+      f'Re[z] in [{bounds.real_min:.6g}, {bounds.real_max:.6g}], '
+      f'Im[z] in [{bounds.imag_min:.6g}, {bounds.imag_max:.6g}]',
+      flush=True)
+    return RectangularSource(bounds, self.nx, self.ny)
+
+  def describe(self) -> dict[str, object]:
+    return {'kind': 'spectrum', 'n_points': int(self.n_points),
+            'nx': int(self.nx), 'ny': int(self.ny), 'pad': float(self.pad)}
+
+
+#: A source that can already produce points.
+ResolvedSource = RectangularSource | FileSource
+#: What a run may be configured with. `resolve` turns any of these into a
+#: ResolvedSource, so the pipeline never branches on which one it got.
+PointSource = RectangularSource | FileSource | SpectrumSource
