@@ -132,8 +132,9 @@ the block layout lives in `fields.py` rather than a vendor-named module.
   `resolve(eigvals)` — every source has one, returning a `ResolvedSource`, which keeps
   the pipeline from branching on which kind it got.
 - **Resolution comes from refinement, not a finer lattice.** `--grid-nx`/`--grid-ny`
-  set a coarse initial grid; `--refine-points N` spends N *extra* evaluations on top of
-  it. There is deliberately no total-points flag and no `near_square` — a total would
+  set a coarse initial grid; `--refine-points N` spends up to N *extra* evaluations on
+  top of it. N is a ceiling: one point per triangle per round, so a big request needs
+  several rounds, and a short run logs the shortfall. There is deliberately no total-points flag and no `near_square` — a total would
   have to be factored back into a shape, and the answer would depend on the arithmetic
   of the number (the old code turned 128 into 8x16 and 127 into 1x127).
 - **Adaptive refinement is opt-in** (`--refine-points`, default 0). Measured: 2.05x

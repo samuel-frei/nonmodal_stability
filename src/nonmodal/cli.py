@@ -52,11 +52,14 @@ def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
 
   refine = parser.add_argument_group('adaptive refinement')
   refine.add_argument('--refine-points', type=int, default=0,
-                      help='Extra evaluations to spend refining onto features, on '
-                           'top of the initial grid (0 disables refinement). This '
-                           'is the intended way to reach resolution: it measurably '
-                           'beats sampling a finer uniform lattice on strongly '
-                           'non-normal operators.')
+                      help='Spend up to this many extra evaluations refining onto '
+                           'features, on top of the initial grid (0 disables '
+                           'refinement). A ceiling, not a guarantee: each round '
+                           'inserts at most one point per triangle, so a large '
+                           'request needs several --refine-rounds. This is the '
+                           'intended way to reach resolution -- it measurably beats '
+                           'sampling a finer uniform lattice on strongly non-normal '
+                           'operators.')
   refine.add_argument('--refine-rounds', type=int, default=DEFAULT_REFINE_ROUNDS,
                       help=f'Rounds to spread --refine-points over (default '
                            f'{DEFAULT_REFINE_ROUNDS}). More rounds adapt more '

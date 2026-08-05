@@ -93,13 +93,18 @@ eigenvalues, and the box it picks is logged.
 **Resolution is asked for as dimensions, not a total.** `--grid-nx` and
 `--grid-ny` give the initial lattice (default 24x24). Keep it coarse.
 
-**`--refine-points N` is how you reach resolution.** It spends `N` further
-evaluations on top of the initial grid, inserting them where a linear
+**`--refine-points N` is how you reach resolution.** It spends *up to* `N`
+further evaluations on top of the initial grid, inserting them where a linear
 interpolant of `log10(sigma_min)` is worst — which is exactly the error the
 contour plot shows. Against a dense-SVD reference at equal total cost this
 roughly halves interpolation error on a strongly non-normal operator (2.05x on
 `west0479`) and is about a wash on nearly-normal ones, so it is off by default.
 `--refine-rounds` (default 4) sets how many passes to spread those points over.
+
+`N` is a ceiling rather than a promise: a round inserts at most one point per
+triangle, and an *n*-point set triangulates into roughly 2*n* triangles, so one
+round can only about triple it. A run that finishes short says so in the log.
+Four rounds comfortably covers the 24x24 → +2600 case.
 
 If the reduced operator is real — it is — its spectrum is conjugate-symmetric,
 so only the upper half-plane is evaluated and the rest follows by conjugation.

@@ -1,6 +1,7 @@
 """Adaptive refinement: the error indicator, the budget, and degenerate input."""
 
 import numpy as np
+import pytest
 import scipy.linalg
 from scipy.interpolate import LinearNDInterpolator
 from scipy.spatial import Delaunay
@@ -56,6 +57,61 @@ def test_refine_respects_the_budget() -> None:
   assert out_z.size > points.size
   assert out_z.size == out_s.size
   assert len(calls) <= 4, 'one batched evaluation per round keeps the pool busy'
+
+
+@pytest.mark.parametrize(
+  ('wanted', 'rounds'),
+  [(600, 4), (600, 7), (10, 4), (50, 3), (17, 5)],
+)
+def test_refine_spends_the_whole_request_when_geometry_allows(
+  wanted: int, rounds: int
+) -> None:
+  """The per-round split must not truncate the remainder away.
+
+  Dividing the request by the round count and flooring used to lose up to
+  rounds-1 points: 600 over 7 rounds bought only 595.
+  """
+  points = uniform_points(Bounds(-1.0, 1.0, -1.0, 1.0), 12, 12)
+  sigmin = _peaked_field(points)
+
+  out_z, _ = refine(
+    points, sigmin, _peaked_field, budget=points.size + wanted, rounds=rounds)
+  assert out_z.size - points.size == wanted
+
+
+@pytest.mark.parametrize(
+  ('nx', 'ny', 'wanted', 'rounds'),
+  [(12, 12, 600, 4), (12, 12, 1000, 4), (12, 12, 600, 1), (3, 3, 500, 4)],
+)
+def test_budget_is_a_ceiling_never_exceeded(
+  nx: int, ny: int, wanted: int, rounds: int
+) -> None:
+  """Even when geometry limits the run, the budget is an upper bound."""
+  points = uniform_points(Bounds(-1.0, 1.0, -1.0, 1.0), nx, ny)
+  sigmin = _peaked_field(points)
+
+  out_z, out_s = refine(
+    points, sigmin, _peaked_field, budget=points.size + wanted, rounds=rounds)
+  assert out_z.size <= points.size + wanted
+  assert out_s.size == out_z.size
+
+
+def test_one_round_is_limited_by_the_triangle_count(capsys) -> None:
+  """A round inserts at most one point per triangle, so it cannot triple a set.
+
+  This is the structural reason --refine-points is a ceiling, and it must be
+  reported rather than silently absorbed.
+  """
+  points = uniform_points(Bounds(-1.0, 1.0, -1.0, 1.0), 12, 12)
+  sigmin = _peaked_field(points)
+
+  out_z, _ = refine(
+    points, sigmin, _peaked_field, budget=points.size + 600, rounds=1)
+  added = out_z.size - points.size
+
+  assert added < 600, 'a single round should run out of triangles'
+  assert added > 2 * points.size * 0.5, 'but it should still roughly triple the set'
+  assert 'short because the triangulation ran out' in capsys.readouterr().out
 
 
 def test_refine_is_a_noop_when_disabled_or_already_full() -> None:

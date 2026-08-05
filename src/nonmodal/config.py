@@ -27,8 +27,8 @@ class RunConfig:
   cache_dir: str = '.'
   output_dir: str = 'pseudospectrum'
   nprocs: int = 128
-  #: Extra evaluations refinement may spend on top of the initial grid.
-  #: Zero disables refinement.
+  #: Ceiling on extra evaluations refinement may spend on top of the initial
+  #: grid; zero disables it. Not a guarantee -- see `refine.refine`.
   refine_points: int = 0
   #: How many rounds to spread `refine_points` over. More rounds adapt more
   #: closely, at one worker-pool round trip each.

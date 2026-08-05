@@ -51,6 +51,12 @@ def refine(
 ) -> tuple[NDArray[np.complex128], NDArray[np.float64]]:
   """Grow a sample set toward `budget` points, worst-error triangles first.
 
+  `budget` is a **ceiling, not a guarantee**. It is never exceeded, but a run
+  can finish short of it because only one point is inserted per triangle per
+  round: a set of n points triangulates into roughly 2n triangles, so a single
+  round can at most about triple it. Several rounds are the way to spend a large
+  budget. Duplicate centroids are dropped too, which costs a few more.
+
   `sample` evaluates a batch of new points; each round issues exactly one call
   so the worker pool stays saturated. Returns the combined points and values.
 
@@ -61,11 +67,18 @@ def refine(
   if rounds < 1 or budget <= points.size:
     return points, sigmin
 
-  per_round = max(1, (budget - points.size) // rounds)
+  wanted = budget - points.size
+  # Spread the remainder over the early rounds instead of truncating it away,
+  # which used to lose up to rounds-1 points for no reason.
+  base, extra = divmod(wanted, rounds)
 
-  for _ in range(rounds):
+  for round_index in range(rounds):
     remaining = budget - points.size
     if remaining <= 0 or points.size < 3:
+      break
+
+    per_round = base + (1 if round_index < extra else 0)
+    if per_round < 1:
       break
 
     xy = _as_xy(points)
@@ -93,5 +106,12 @@ def refine(
     points = np.concatenate([points, candidates])
     sigmin = np.concatenate([sigmin, sample(candidates)])
 
+  shortfall = budget - points.size
+  if shortfall > 0:
+    print(
+      f'refinement placed {wanted - shortfall}/{wanted} requested points; '
+      f'{shortfall} short because the triangulation ran out of candidates. '
+      f'More rounds would place more.',
+      flush=True)
   return points, sigmin
 
