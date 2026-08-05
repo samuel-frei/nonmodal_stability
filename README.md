@@ -24,6 +24,18 @@ Requires Python 3.14+ and [uv](https://docs.astral.sh/uv/).
 uv sync
 ```
 
+## Example
+
+[`examples/pseudospectra_intro.ipynb`](examples/pseudospectra_intro.ipynb) works
+one operator through end to end using matrices fetched from the NIST Matrix
+Market — sampling, contours, and the `sigma_min / dist(z, spectrum)` ratio that
+quantifies how far the resolvent exceeds what the eigenvalues alone predict.
+It needs no simulation output of your own.
+
+```bash
+uv run jupyter lab examples/pseudospectra_intro.ipynb   # requires jupyter
+```
+
 ## Inputs
 
 A run needs two HDF5 files produced by the simulation:

@@ -82,6 +82,11 @@ no caches, which is why `run` also saves `pseudo_eigvals.npy` for the overlay.
 | `pipeline.py` | `run_pipeline`, `plot_run` |
 | `cli.py` | argparse subcommands; the only module touching `Namespace` |
 
+`examples/pseudospectra_intro.ipynb` is the runnable front door. It imports the test
+suite's Matrix Market fetcher via `sys.path` (`tests/` is not a package), so it needs
+no simulation output. Keep its cells executable as a plain script — no IPython magics —
+since that is how they get verified.
+
 ### Naming rule
 
 **Do not use `oft` / `OFT` in our identifiers.** Those names are reserved for genuine
