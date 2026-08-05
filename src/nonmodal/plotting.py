@@ -1,18 +1,32 @@
-"""Interactive Plotly views of a sampled pseudospectrum."""
+"""Interactive Plotly views built from scattered pseudospectrum samples.
+
+Samples arrive as a flat point set, so structure is reintroduced here:
+
+* contours come from `matplotlib.tri.tricontour` on a Delaunay triangulation of
+  the actual samples, so no interpolation error is introduced where it matters;
+* the heatmap interpolates onto a regular mesh, because a raster needs one.
+
+Both work in log10(sigma_min). Interpolating the raw value would misplace
+exactly the contours of interest: sigma_min spans orders of magnitude, dropping
+to ~3e-4 of the eigenvalue distance on a strongly non-normal operator.
+"""
 
 import os
 from typing import Any
 
+import matplotlib.pyplot as plt
+import matplotlib.tri as mtri
 import numpy as np
+import plotly.colors as pc
 import plotly.graph_objects as go
 from numpy.typing import NDArray
+from scipy.interpolate import LinearNDInterpolator
 
 TITLE_FONT_SIZE = 20
 AXIS_TITLE_FONT_SIZE = 18
 AXIS_TICK_FONT_SIZE = 14
 COLORBAR_TITLE_FONT_SIZE = 18
 COLORBAR_TICK_FONT_SIZE = 14
-CONTOUR_LABEL_FONT_SIZE = 12
 
 
 def _normalize_html_name(name: str, label: str) -> str:
@@ -34,6 +48,15 @@ def _split_plot_output_names(plot_name: str) -> tuple[str, str]:
   return f'{stem}_heatmap{ext}', f'{stem}_contours{ext}'
 
 
+def _safe_log10(sigmin: NDArray[np.float64]) -> NDArray[np.float64]:
+  """log10 of positive finite values, NaN elsewhere."""
+  values = np.asarray(sigmin, dtype=float)
+  out = np.full(values.shape, np.nan, dtype=float)
+  usable = np.isfinite(values) & (values > 0.0)
+  out[usable] = np.log10(values[usable])
+  return out
+
+
 def _add_eigenvalue_overlay(fig: Any, eigvals: NDArray[np.complexfloating]) -> None:
   """Overlay eigenvalue markers on an existing Plotly figure."""
   eigvals_arr = np.asarray(eigvals).ravel()
@@ -51,14 +74,9 @@ def _add_eigenvalue_overlay(fig: Any, eigvals: NDArray[np.complexfloating]) -> N
 
 
 def _apply_common_layout(
-  fig: Any,
-  title: str,
-  x_min: float,
-  x_max: float,
-  y_min: float,
-  y_max: float,
+  fig: Any, title: str, z: NDArray[np.complex128]
 ) -> None:
-  """Apply the shared axis, title and margin styling to a figure."""
+  """Apply shared axis, title and margin styling, framed on the sample set."""
   fig.update_layout(
     title={
       'text': title,
@@ -72,63 +90,146 @@ def _apply_common_layout(
       'tickformat': '.3g',
       'constrain': 'domain',
       'autorange': False,
-      'range': [x_min, x_max],
+      'range': [float(z.real.min()), float(z.real.max())],
     },
     yaxis={
       'title': {'text': 'Im[z]', 'font': {'size': AXIS_TITLE_FONT_SIZE}},
       'tickfont': {'size': AXIS_TICK_FONT_SIZE},
       'tickformat': '.3g',
       'autorange': False,
-      'range': [y_min, y_max],
+      'range': [float(z.imag.min()), float(z.imag.max())],
     },
     margin={'l': 60, 'r': 200, 'b': 55, 't': 50},
     dragmode='zoom')
 
 
-def _axis_extents(
-  R: NDArray[np.float64],
-  C: NDArray[np.float64],
-) -> tuple[NDArray[np.float64], NDArray[np.float64], float, float, float, float]:
-  """Extract 1-D axes and their extents from meshgrid coordinate arrays."""
-  x_axis = np.asarray(R, dtype=float)[0, :]
-  y_axis = np.asarray(C, dtype=float)[:, 0]
-  return (
-    x_axis,
-    y_axis,
-    float(np.min(x_axis)),
-    float(np.max(x_axis)),
-    float(np.min(y_axis)),
-    float(np.max(y_axis)))
+def _write(fig: Any, output_dir: str, plot_name: str, inline_js: bool, what: str) -> str:
+  os.makedirs(output_dir, exist_ok=True)
+  out_path = os.path.join(output_dir, plot_name)
+  fig.write_html(out_path, include_plotlyjs=True if inline_js else 'cdn')
+  print(f'wrote interactive {what}: {out_path}', flush=True)
+  return out_path
+
+
+def _triangulation(z: NDArray[np.complex128]) -> mtri.Triangulation:
+  if z.size < 3:
+    raise ValueError('at least 3 sample points are needed to triangulate')
+  return mtri.Triangulation(z.real, z.imag)
+
+
+def pseudo_contours(
+  output_dir: str,
+  plot_name: str,
+  z: NDArray[np.complex128],
+  sigmin: NDArray[np.float64],
+  eigvals: NDArray[np.complexfloating],
+  levels: NDArray[np.float64],
+  inline_js: bool = False,
+) -> str:
+  """Render contours drawn directly from the sampled points."""
+  levels = np.unique(np.sort(np.asarray(levels, dtype=float).ravel()))
+  if levels.size == 0:
+    raise ValueError('levels must contain at least one contour value')
+  if levels[0] <= 0.0:
+    raise ValueError('levels must be strictly positive')
+
+  tri = _triangulation(z)
+  values = _safe_log10(sigmin)
+  # tricontour cannot handle NaN vertices; mask any triangle touching one.
+  bad = ~np.isfinite(values)
+  if bad.any():
+    tri.set_mask(bad[tri.triangles].any(axis=1))
+    values = np.nan_to_num(values, nan=float(np.nanmin(values)))
+
+  fig = go.Figure()
+
+  # tricontour needs an Axes to draw into; the figure is never rendered, only
+  # mined for its contour vertices.
+  figure = plt.figure()
+  try:
+    ax = figure.add_subplot(111)
+    cs = ax.tricontour(tri, values, levels=np.log10(levels))
+    # Pair against cs.levels rather than the requested levels: matplotlib may
+    # drop levels that fall outside the data range, and zipping the requested
+    # list against allsegs would then label contours with the wrong epsilon.
+    drawn = np.power(10.0, np.asarray(cs.levels, dtype=float))
+    palette = _level_colours(len(drawn))
+    for level_value, colour, segs in zip(
+      drawn, palette, cs.allsegs, strict=True
+    ):
+      first = True
+      for seg in segs:
+        if seg.shape[0] < 2:
+          continue
+        fig.add_trace(go.Scatter(
+          x=seg[:, 0],
+          y=seg[:, 1],
+          mode='lines',
+          line={'width': 2.0, 'color': colour},
+          name=f'{level_value:.2e}',
+          legendgroup=f'{level_value:.2e}',
+          showlegend=first,
+          hovertemplate=(
+            f'epsilon={level_value:.4e}<br>'
+            'Re[z]=%{x:.6g}<br>Im[z]=%{y:.6g}<extra></extra>')))
+        first = False
+  finally:
+    plt.close(figure)
+
+  _add_eigenvalue_overlay(fig, eigvals)
+  _apply_common_layout(fig, 'Pseudospectra Contours of Resistive MHD Operator', z)
+  fig.update_layout(legend={'title': {'text': 'ε'}})
+  return _write(fig, output_dir, plot_name, inline_js, 'contours')
+
+
+def _level_colours(n: int) -> list[str]:
+  """Sample the Turbo colourscale at n points."""
+  if n == 1:
+    return [pc.sample_colorscale('Turbo', [0.5])[0]]
+  return pc.sample_colorscale('Turbo', list(np.linspace(0.0, 1.0, n)))
+
+
+def interpolate_to_mesh(
+  z: NDArray[np.complex128],
+  sigmin: NDArray[np.float64],
+  mesh: int,
+) -> tuple[NDArray[np.float64], NDArray[np.float64], NDArray[np.float64]]:
+  """Interpolate log10(sigma_min) from scattered samples onto a regular mesh."""
+  values = _safe_log10(sigmin)
+  usable = np.isfinite(values)
+  if usable.sum() < 3:
+    raise ValueError('need at least 3 positive finite samples to interpolate')
+
+  x = np.linspace(float(z.real.min()), float(z.real.max()), mesh)
+  y = np.linspace(float(z.imag.min()), float(z.imag.max()), mesh)
+  X, Y = np.meshgrid(x, y)
+  interp = LinearNDInterpolator(
+    np.column_stack([z.real[usable], z.imag[usable]]), values[usable])
+  return x, y, np.asarray(interp(X, Y), dtype=float)
 
 
 def pseudo_heatmap(
   output_dir: str,
   plot_name: str,
-  R: NDArray[np.float64],
-  C: NDArray[np.float64],
+  z: NDArray[np.complex128],
   sigmin: NDArray[np.float64],
   eigvals: NDArray[np.complexfloating],
+  mesh: int = 400,
+  inline_js: bool = False,
 ) -> str:
-  """Render an interactive heatmap view of pseudospectrum values."""
-  x_axis, y_axis, x_min, x_max, y_min, y_max = _axis_extents(R, C)
+  """Render a heatmap by interpolating the samples onto a regular mesh."""
+  x_axis, y_axis, log_sig = interpolate_to_mesh(z, sigmin, mesh)
 
-  sig_values = np.asarray(sigmin, dtype=float)
-  positive_finite = np.isfinite(sig_values) & (sig_values > 0.0)
-  log_sig = np.full(sig_values.shape, np.nan, dtype=float)
-  if np.any(positive_finite):
-    log_sig[positive_finite] = np.log10(sig_values[positive_finite])
-
-  finite_log = np.isfinite(log_sig)
-  if not np.any(finite_log):
-    tickvals = np.array([0.0], dtype=float)
+  finite = np.isfinite(log_sig)
+  if not finite.any():
+    zmin, zmax = 0.0, 1.0
+    tickvals = np.array([0.0])
     ticktext = ['nan']
-    zmin = 0.0
-    zmax = 0.0
   else:
-    zmin = float(np.nanmin(log_sig[finite_log]))
-    zmax = float(np.nanmax(log_sig[finite_log]))
+    zmin = float(np.nanmin(log_sig[finite]))
+    zmax = float(np.nanmax(log_sig[finite]))
     if zmax <= zmin:
-      zmax = np.nextafter(zmin, np.inf)
+      zmax = float(np.nextafter(zmin, np.inf))
     tickvals = np.linspace(zmin, zmax, 6)
     ticktext = [f'{10.0 ** val:.3e}' for val in tickvals]
 
@@ -138,13 +239,9 @@ def pseudo_heatmap(
     z=log_sig,
     zmin=zmin,
     zmax=zmax,
-    zsmooth='best',
     colorscale='Viridis',
     colorbar={
-      'title': {
-        'text': 'ε',
-        'font': {'size': COLORBAR_TITLE_FONT_SIZE},
-      },
+      'title': {'text': 'ε', 'font': {'size': COLORBAR_TITLE_FONT_SIZE}},
       'tickmode': 'array',
       'tickvals': tickvals,
       'ticktext': ticktext,
@@ -155,121 +252,5 @@ def pseudo_heatmap(
     hovertemplate='Re[z]=%{x:.6g}<br>Im[z]=%{y:.6g}<br>log10(epsilon)=%{z:.4f}<extra></extra>'))
 
   _add_eigenvalue_overlay(fig, eigvals)
-  _apply_common_layout(
-    fig, 'Pseudospectra Heatmap of Resistive MHD Operator', x_min, x_max, y_min, y_max)
-
-  out_path = os.path.join(output_dir, plot_name)
-  fig.write_html(out_path, include_plotlyjs='cdn')
-  print(f'wrote interactive heatmap: {out_path}', flush=True)
-  return out_path
-
-
-def pseudo_contours(
-  output_dir: str,
-  plot_name: str,
-  R: NDArray[np.float64],
-  C: NDArray[np.float64],
-  sigmin: NDArray[np.float64],
-  eigvals: NDArray[np.complexfloating],
-  levels: NDArray[np.float64],
-) -> str:
-  """Render an interactive, colour-coded contour view of pseudospectrum values."""
-  levels = np.asarray(levels, dtype=float).ravel()
-  if levels.size == 0:
-    raise ValueError('levels must contain at least one contour value')
-  levels = np.unique(np.sort(levels))
-  if levels[0] <= 0.0:
-    raise ValueError('levels must be strictly positive')
-
-  # Keep log-space color progression for wide dynamic range while directly
-  # labeling contour lines in epsilon units.
-  log_levels = np.log10(levels)
-  contour_start = float(log_levels[0])
-  contour_end = float(log_levels[-1])
-
-  x_axis, y_axis, x_min, x_max, y_min, y_max = _axis_extents(R, C)
-
-  sig_values = np.asarray(sigmin, dtype=float)
-  finite_positive = np.isfinite(sig_values) & (sig_values > 0.0)
-  safe_sig = np.array(sig_values, copy=True)
-  safe_sig[~finite_positive] = np.nan
-  safe_log_sig = np.array(sig_values, copy=True)
-  safe_log_sig[finite_positive] = np.log10(sig_values[finite_positive])
-  safe_log_sig[~finite_positive] = np.nan
-
-  level_tick_vals = np.unique(np.concatenate(([contour_start, contour_end], log_levels)))
-  level_tick_text = [f'{10.0 ** val:.1e}' for val in level_tick_vals]
-
-  if levels.size == 1:
-    contour_end = float(np.nextafter(contour_start, np.inf))
-    contour_size = float(contour_end - contour_start)
-  else:
-    contour_size = float((contour_end - contour_start) / (levels.size - 1))
-  if contour_size <= 0.0:
-    contour_size = float(np.nextafter(0.0, 1.0))
-
-  fig = go.Figure()
-  fig.add_trace(go.Contour(
-    x=x_axis,
-    y=y_axis,
-    z=safe_log_sig,
-    customdata=safe_sig,
-    zmin=contour_start,
-    zmax=contour_end,
-    autocontour=False,
-    colorscale='Turbo',
-    contours={
-      'start': contour_start,
-      'end': contour_end,
-      'size': contour_size,
-      'showlabels': False,
-      'coloring': 'lines',
-    },
-    line={'width': 2.0},
-    colorbar={
-      'title': {
-        'text': 'ε',
-        'font': {'size': COLORBAR_TITLE_FONT_SIZE},
-      },
-      'tickmode': 'array',
-      'tickvals': level_tick_vals,
-      'ticktext': level_tick_text,
-      'tickfont': {'size': COLORBAR_TICK_FONT_SIZE},
-      'ticks': '',
-      'ticklen': 0,
-    },
-    hovertemplate=(
-      'Re[z]=%{x:.6g}<br>Im[z]=%{y:.6g}<br>'
-      'epsilon=%{customdata:.4e}<br>log10(epsilon)=%{z:.4f}<extra></extra>')))
-
-  # Overlay one contour trace per level to label lines directly in epsilon units.
-  for level_value in levels:
-    level = float(level_value)
-    label_end = float(np.nextafter(level, np.inf))
-    label_size = float(max(label_end - level, np.finfo(float).eps))
-    fig.add_trace(go.Contour(
-      x=x_axis,
-      y=y_axis,
-      z=safe_sig,
-      autocontour=False,
-      showscale=False,
-      hoverinfo='skip',
-      contours={
-        'start': level,
-        'end': label_end,
-        'size': label_size,
-        'showlabels': True,
-        'labelformat': '.2e',
-        'labelfont': {'size': CONTOUR_LABEL_FONT_SIZE, 'color': 'black'},
-        'coloring': 'none',
-      },
-      line={'width': 0.0, 'color': 'rgba(0,0,0,0)'}))
-
-  _add_eigenvalue_overlay(fig, eigvals)
-  _apply_common_layout(
-    fig, 'Pseudospectra Contours of Resistive MHD Operator', x_min, x_max, y_min, y_max)
-
-  out_path = os.path.join(output_dir, plot_name)
-  fig.write_html(out_path, include_plotlyjs='cdn')
-  print(f'wrote interactive contours: {out_path}', flush=True)
-  return out_path
+  _apply_common_layout(fig, 'Pseudospectra Heatmap of Resistive MHD Operator', z)
+  return _write(fig, output_dir, plot_name, inline_js, 'heatmap')

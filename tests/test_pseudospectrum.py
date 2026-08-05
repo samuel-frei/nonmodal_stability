@@ -8,12 +8,15 @@ exactly rather than against a golden file.
 
 import numpy as np
 import pytest
+import scipy.linalg
 
 from nonmodal.pseudospectrum import (
   _worker_count,
   choose_contour_levels,
   compute_pseudospectrum,
+  sample_sigmin,
 )
+from nonmodal.sampling import mirror_conjugates
 
 
 def _exact_sigmin(
@@ -53,7 +56,7 @@ def test_compute_pseudospectrum_requires_bounds() -> None:
 
 def test_compute_pseudospectrum_rejects_inverted_bounds() -> None:
   T = np.diag([1 + 0j, 2 + 0j]).astype(np.complex128)
-  with pytest.raises(ValueError, match='real_max must be greater'):
+  with pytest.raises(ValueError, match='strict bounds'):
     compute_pseudospectrum(
       T, grid_points=4, nprocs=1,
       real_min=1.0, real_max=-1.0, imag_min=-1.0, imag_max=1.0)
@@ -65,6 +68,47 @@ def test_compute_pseudospectrum_rejects_inverted_bounds() -> None:
 )
 def test_worker_count_clamps(total: int, requested: int, expected: int) -> None:
   assert _worker_count(total, requested) == expected
+
+
+def test_sample_sigmin_handles_empty_input() -> None:
+  T = np.diag([1 + 0j, 2 + 0j]).astype(np.complex128)
+  assert sample_sigmin(np.zeros(0, dtype=np.complex128), T, 1).size == 0
+
+
+def test_sampling_is_bitwise_reproducible() -> None:
+  """Repeating a run must give identical numbers.
+
+  ARPACK draws a random start vector unless given one, which made results
+  irreproducible; on an ill-conditioned operator the spread reached ~1e-4
+  relative. `_start_vector` pins it.
+  """
+  rng = np.random.default_rng(11)
+  T = np.triu(rng.normal(size=(10, 10)) + 1j * rng.normal(size=(10, 10)))
+  z = np.array([0.3 + 0.4j, -1.0 + 0.2j, 2.0 - 0.5j], dtype=np.complex128)
+
+  first = sample_sigmin(z, T.astype(np.complex128), 1)
+  second = sample_sigmin(z, T.astype(np.complex128), 1)
+  assert np.array_equal(first, second)
+
+
+def test_half_plane_mirroring_matches_full_sampling() -> None:
+  """A real operator's pseudospectrum is symmetric, so mirroring is exact.
+
+  This is the precondition the pipeline checks with np.isrealobj: sampling the
+  upper half-plane and conjugating must reproduce what full sampling gives.
+  """
+  rng = np.random.default_rng(3)
+  A = rng.normal(size=(8, 8))
+  assert np.isrealobj(A)
+  T = np.asarray(scipy.linalg.schur(A, output='complex')[0], dtype=np.complex128)
+
+  z = np.array([0.4 + 0.9j, -1.2 + 0.3j, 0.7 + 0.0j], dtype=np.complex128)
+  upper = sample_sigmin(z, T, 1)
+  mirrored_z, mirrored_s = mirror_conjugates(z, upper)
+
+  direct = sample_sigmin(np.conj(z[z.imag != 0]), T, 1)
+  np.testing.assert_allclose(mirrored_s[z.size:], direct, rtol=1e-6)
+  np.testing.assert_allclose(mirrored_z[z.size:], np.conj(z[z.imag != 0]))
 
 
 def test_contour_levels_are_geometric_and_bounded() -> None:

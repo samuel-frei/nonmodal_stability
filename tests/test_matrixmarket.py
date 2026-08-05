@@ -74,7 +74,8 @@ def _spectrum_bounds(
   if symmetric:
     return (float(eigvals.real.min()) - p, float(eigvals.real.max()) + p,
             -imag_extent, imag_extent)
-  # Asymmetric bounds defeat the half-plane mirroring and force a full grid.
+  # An off-centre box, to check nothing depends on the region straddling the
+  # real axis symmetrically.
   return (float(eigvals.real.min()) - p, float(eigvals.real.max()) + p,
           -imag_extent, 0.83 * imag_extent)
 
@@ -165,8 +166,8 @@ def test_nonnormality_produces_a_strict_gap(name: str) -> None:
   assert ratio.min() < 0.9, f'{name} shows no non-normal amplification'
 
 
-def test_full_grid_path_matches_dense_svd() -> None:
-  """Asymmetric imaginary bounds disable mirroring; the full grid must still agree."""
+def test_off_centre_region_matches_dense_svd() -> None:
+  """A region not centred on the real axis must sample just as accurately."""
   spec = MATRICES['gre__115']
   eigvals, T = _prepared('gre__115')
   rmin, rmax, imin, imax = _spectrum_bounds(eigvals, symmetric=False)

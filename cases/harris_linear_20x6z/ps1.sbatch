@@ -25,11 +25,9 @@ cd "${SLURM_SUBMIT_DIR:-$PWD}"
 #   RUN="uv run --project /path/to/nonmodal nonmodal"
 RUN="${RUN:-nonmodal}"
 
-srun ${RUN} \
+srun ${RUN} run \
   --grid-points 3200 \
   --nprocs "${SLURM_CPUS_PER_TASK:-16}" \
-  --min-level 1e-7 \
-  --nlevels 16 \
   --run-tag "${SLURM_JOB_NAME:-default}" \
   --case-tag harris_linear_20x6z \
   --real-min -9.0e6 --real-max 5.0e5 \
@@ -38,3 +36,13 @@ srun ${RUN} \
   --massmat ./mass_mat.h5 \
   --cache-dir . \
   --output-dir .
+
+# Plotting is a separate step and needs no HDF5, no operator and no cores, so
+# run it wherever you read the results -- somewhere with network access, unless
+# you pass --plot-inline-js:
+#
+#   nonmodal plot --output-dir . --min-level 1e-7 --nlevels 16
+#
+# Add `--refine-rounds 4` to the run above to concentrate samples where the
+# field varies. It measurably beats uniform sampling on strongly non-normal
+# operators and is roughly a wash otherwise, so it is off by default.

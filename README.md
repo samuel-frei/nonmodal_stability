@@ -50,32 +50,62 @@ Reduction keeps blocks `(0, 1, 3, 4, 5)` — `n, velx, velz, T, psi` — droppin
 
 ## Command-line use
 
-Run from a directory containing the input files:
+There are two subcommands, because computing and looking at the result have
+different requirements. `run` needs the HDF5 matrices and a machine with cores;
+`plot` needs only a finished output directory.
 
 ```bash
-uv run nonmodal --grid-points 3200 --nprocs 32 --real-min -9e6 --real-max 5e5 --imag-min -3e6 --imag-max 3e6
+# On the cluster, from a directory containing the input files:
+uv run nonmodal run --grid-points 3200 --nprocs 32 \
+  --real-min -9e6 --real-max 5e5 --imag-min -3e6 --imag-max 3e6
+
+# Anywhere afterwards -- no HDF5, no operator, no caches:
+uv run nonmodal plot --output-dir pseudospectrum --min-level 1e-7 --nlevels 16
 ```
 
 `python -m nonmodal` works identically. See `cases/harris_linear_20x6z/ps1.sbatch`
 for a portable SLURM template.
 
-Instead of rectangular bounds you can supply a precomputed flat complex grid
-with `--grid-npy grid.npy`; add `--grid-shape ROWS COLS` if you also want plots.
+Instead of rectangular bounds you can supply a precomputed set of complex points
+with `--grid-npy points.npy` — a flat complex array. Samples are unstructured
+throughout, so no shape is needed.
+
+### Sampling
+
+`--grid-points` is a budget of `sigma_min` evaluations, not a grid shape.
+
+If the reduced operator is real — it is — its spectrum is conjugate-symmetric,
+so only the upper half-plane is evaluated and the rest follows by conjugation.
+`--no-half-plane` disables that.
+
+`--refine-rounds N` enables adaptive refinement: seed a coarse set, triangulate,
+and insert points into the triangles where a linear interpolant of
+`log10(sigma_min)` is worst. Measured against a dense-SVD reference at equal
+budget, this roughly halves interpolation error on a strongly non-normal
+operator (2.05x on `west0479`) and is roughly a wash on nearly-normal ones, so
+it is **off by default**.
 
 ### Outputs
 
-Written to `--output-dir` (default `pseudospectrum/`):
+`run` writes to `--output-dir` (default `pseudospectrum/`):
 
-- `pseudo_R.npy`, `pseudo_C.npy`, `pseudo_sigmin.npy` — sampled grid and values
-  (or `pseudo_z.npy` / `pseudo_sigmin_flat.npy` for an unstructured grid)
-- `*_heatmap.html`, `*_contours.html` — interactive Plotly views
-- `run_metadata.json` — bounds, grid, worker counts, resolved input paths
+- `pseudo_z.npy`, `pseudo_sigmin.npy` — the sampled points and their values,
+  both flat
+- `pseudo_eigvals.npy` — the spectrum, so `plot` can draw its overlay
+  standalone
+- `run_metadata.json` — sampling strategy, bounds, worker counts, input paths
 - `eigvecs_plot/xmhd2d_*.rst` — leading eigenvectors as restart files
 
-> **Note:** plots are written with `include_plotlyjs='cdn'`, so they render
-> blank on a machine without internet access. Open them somewhere with network
-> access, or change the call in `src/nonmodal/plotting.py` to
-> `include_plotlyjs=True` for self-contained files.
+`plot` adds `*_heatmap.html` and `*_contours.html`. Contours are drawn directly
+from a triangulation of the samples, so they carry no interpolation error; the
+heatmap interpolates `log10(sigma_min)` onto a regular mesh (`--plot-mesh`)
+because a raster needs one.
+
+> **Note:** plots link plotly.js from a CDN and so render blank without network
+> access. Pass `--plot-inline-js` to embed it instead (~5 MB per file).
+
+Runs are bitwise reproducible: the iterative solver is given a fixed starting
+vector rather than ARPACK's random one.
 
 ## Caching — read this before trusting a result
 
@@ -102,8 +132,22 @@ in the run log.
 
 ## Library use
 
+The primitive is `sample_sigmin`, which evaluates a flat array of complex
+points. Everything else — uniform grids, refinement, mirroring — is a question
+of which points you hand it.
+
 ```python
 import numpy as np
+from nonmodal import Bounds, sample_sigmin, uniform_points
+
+points = uniform_points(Bounds(-9e6, 5e5, -3e6, 3e6), nx=64, ny=64)
+sigmin = sample_sigmin(points, schur_t, nprocs=16)
+```
+
+`compute_pseudospectrum` wraps that for the common rectangular case and returns
+`(R, C, sigmin)` meshes ready for contouring:
+
+```python
 from nonmodal import HDF5Matrix, build_reduction_mapping, compute_pseudospectrum
 
 nr_local, keep_global = build_reduction_mapping('lin_ops.h5')
@@ -118,11 +162,11 @@ The package ships `py.typed`.
 
 Two behaviours worth knowing:
 
-- **Half-plane mirroring.** When the imaginary axis is symmetric about zero,
-  only the upper half is evaluated and mirrored. That is valid only for
-  operators whose spectrum is closed under conjugation (true for the real
-  reduced operator). For an arbitrary complex operator, pass asymmetric
-  imaginary bounds to force full-grid evaluation.
+- **Half-plane mirroring.** `run` decides from the operator itself
+  (`np.isrealobj`) whether the spectrum is conjugate-symmetric, and if so
+  samples only `Im z >= 0`, recovering the rest with `mirror_conjugates`.
+  `sample_sigmin` never does this on your behalf — mirroring is something you
+  opt into by choosing the points.
 - **BLAS threads.** Importing `nonmodal` pins `OMP/MKL/OPENBLAS_NUM_THREADS` to
   `1`, because the sampling pool would otherwise oversubscribe every core. It
   uses `setdefault`, so if you want more threads for your own dense linear

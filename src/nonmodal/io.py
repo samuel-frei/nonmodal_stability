@@ -1,6 +1,11 @@
-"""Run metadata and array output."""
+"""Run metadata and array output.
 
-import argparse
+Sample sets are stored flat: `pseudo_z.npy` (complex points) alongside
+`pseudo_sigmin.npy` (values). `pseudo_eigvals.npy` travels with them so that
+`nonmodal plot` can draw the eigenvalue overlay without reloading the operator
+or touching the caches.
+"""
+
 import json
 import os
 import socket
@@ -10,90 +15,90 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 
-from .pseudospectrum import _worker_count
+from .config import RunConfig
+from .sampling import Bounds
+
+POINTS_FILE = 'pseudo_z.npy'
+SIGMIN_FILE = 'pseudo_sigmin.npy'
+EIGVALS_FILE = 'pseudo_eigvals.npy'
+METADATA_FILE = 'run_metadata.json'
 
 
 def build_metadata(
-  args: argparse.Namespace,
-  real_min: float,
-  real_max: float,
-  imag_min: float,
-  imag_max: float,
-  grid_points: int,
-  rows: int | None = None,
-  cols: int | None = None,
-  grid_type: str = 'structured',
-  grid_source: str = 'generated',
+  config: RunConfig,
+  bounds: Bounds,
+  n_points: int,
+  n_evaluated: int,
+  half_plane: bool,
+  effective_workers: int,
 ) -> dict[str, Any]:
-  """Build structured metadata describing one pseudospectrum run."""
-  grid_points_effective = int(grid_points)
-  effective_workers = _worker_count(grid_points_effective, args.nprocs)
-  grid_shape = None
-  if rows is not None and cols is not None:
-    grid_shape = {
-      'rows': int(rows),
-      'cols': int(cols),
-    }
-
-  metadata = {
+  """Describe one run, for reproducibility and traceability."""
+  return {
     'created_utc': datetime.now(UTC).isoformat(timespec='seconds').replace('+00:00', 'Z'),
     'hostname': socket.gethostname(),
     'cwd': os.getcwd(),
-    'run_tag': args.run_tag,
-    'case_tag': args.case_tag,
+    'run_tag': config.run_tag,
+    'case_tag': config.case_tag,
     'slurm_job_id': os.environ.get('SLURM_JOB_ID', ''),
     'inputs': {
-      'jacobian': os.path.abspath(args.jacobian),
-      'massmat': os.path.abspath(args.massmat),
-      'cache_dir': os.path.abspath(args.cache_dir),
+      'jacobian': os.path.abspath(config.jacobian),
+      'massmat': os.path.abspath(config.massmat),
+      'cache_dir': os.path.abspath(config.cache_dir),
     },
-    'grid_points': int(grid_points_effective),
-    'grid_shape': grid_shape,
-    'grid_type': grid_type,
-    'grid_source': grid_source,
-    'grid_npy': args.grid_npy or '',
-    'nprocs_requested': int(args.nprocs),
+    'sampling': {
+      'source': config.source.describe(),
+      'refine_rounds': int(config.refine_rounds),
+      'points_total': int(n_points),
+      'points_evaluated': int(n_evaluated),
+      'half_plane_symmetry': bool(half_plane),
+      'bounds': bounds.as_dict(),
+    },
+    'nprocs_requested': int(config.nprocs),
     'nprocs_effective': int(effective_workers),
-    'bounds': {
-      'real_min': float(real_min),
-      'real_max': float(real_max),
-      'imag_min': float(imag_min),
-      'imag_max': float(imag_max),
-    },
-    'levels': {
-      'min_level': float(args.min_level),
-      'nlevels': int(args.nlevels),
-    },
   }
-
-  return metadata
 
 
 def write_metadata(output_dir: str, metadata: dict[str, Any]) -> None:
-  """Persist run metadata as JSON for reproducibility and traceability."""
-  path = os.path.join(output_dir, 'run_metadata.json')
+  """Persist run metadata as JSON."""
+  os.makedirs(output_dir, exist_ok=True)
+  path = os.path.join(output_dir, METADATA_FILE)
   with open(path, 'w', encoding='ascii') as f:
     json.dump(metadata, f, indent=2, sort_keys=True)
   print(f'wrote metadata: {path}', flush=True)
 
 
-def save_pseudospectrum_arrays(
+def read_metadata(output_dir: str) -> dict[str, Any]:
+  """Read back the metadata written by a run."""
+  with open(os.path.join(output_dir, METADATA_FILE), encoding='ascii') as f:
+    return dict(json.load(f))
+
+
+def save_samples(
   output_dir: str,
-  R: NDArray[np.float64],
-  C: NDArray[np.float64],
+  z: NDArray[np.complex128],
   sigmin: NDArray[np.float64],
+  eigvals: NDArray[np.complexfloating],
 ) -> None:
-  """Save the sampled grid and pseudospectrum values as NumPy arrays."""
-  np.save(os.path.join(output_dir, 'pseudo_R.npy'), R)
-  np.save(os.path.join(output_dir, 'pseudo_C.npy'), C)
-  np.save(os.path.join(output_dir, 'pseudo_sigmin.npy'), sigmin)
+  """Save the sampled point set, its values, and the spectrum."""
+  os.makedirs(output_dir, exist_ok=True)
+  np.save(os.path.join(output_dir, POINTS_FILE), z)
+  np.save(os.path.join(output_dir, SIGMIN_FILE), sigmin)
+  np.save(os.path.join(output_dir, EIGVALS_FILE), eigvals)
+  print(f'wrote {z.size} samples to {os.path.abspath(output_dir)}', flush=True)
 
 
-def save_pseudospectrum_flat(
+def load_samples(
   output_dir: str,
-  zz_flat: NDArray[np.complex128],
-  sigmin_flat: NDArray[np.float64],
-) -> None:
-  """Save a flat complex grid and its pseudospectrum values as NumPy arrays."""
-  np.save(os.path.join(output_dir, 'pseudo_z.npy'), zz_flat)
-  np.save(os.path.join(output_dir, 'pseudo_sigmin_flat.npy'), sigmin_flat)
+) -> tuple[NDArray[np.complex128], NDArray[np.float64], NDArray[np.complexfloating]]:
+  """Load a finished run's samples, as written by `save_samples`."""
+  z = np.load(os.path.join(output_dir, POINTS_FILE))
+  sigmin = np.load(os.path.join(output_dir, SIGMIN_FILE))
+  eigvals_path = os.path.join(output_dir, EIGVALS_FILE)
+  eigvals = (
+    np.load(eigvals_path)
+    if os.path.exists(eigvals_path)
+    else np.zeros(0, dtype=np.complex128))
+  if z.shape != sigmin.shape:
+    raise ValueError(
+      f'{POINTS_FILE} and {SIGMIN_FILE} disagree: {z.shape} vs {sigmin.shape}')
+  return z, sigmin, eigvals

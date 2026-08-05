@@ -8,6 +8,7 @@ them by hand after any such change.
 
 import os
 from datetime import UTC, datetime
+from typing import Any
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -28,19 +29,31 @@ DEFAULT_TIMESTEP = 1e-7
 DEFAULT_CACHE_DIR = '.'
 
 
-def _report_cache_hit(label: str, path: str, shape: tuple[int, ...]) -> None:
-  """Log which cache file was reused, and when it was written.
+def _load_cached(cache_dir: str, filename: str, label: str) -> NDArray[Any] | None:
+  """Return a cached array, or None if it is absent or unreadable.
 
-  Caches are keyed by filename alone, so surfacing the absolute path and mtime
-  is the cheapest guard against silently computing with a stale operator.
+  Caches are keyed by filename alone, so a hit logs the absolute path and mtime:
+  that is the cheapest guard against silently computing with a stale operator
+  after the inputs, DEFAULT_TIMESTEP or KEPT_BLOCK_IDS have changed.
   """
-  abs_path = os.path.abspath(path)
+  path = os.path.abspath(os.path.join(cache_dir, filename))
   try:
-    ts = os.path.getmtime(abs_path)
-    mtime = datetime.fromtimestamp(ts, tz=UTC).isoformat(timespec='seconds')
+    array = np.load(path)
+  except (FileNotFoundError, OSError, ValueError):
+    return None
+  try:
+    mtime = datetime.fromtimestamp(os.path.getmtime(path), tz=UTC).isoformat(
+      timespec='seconds')
   except OSError:
     mtime = 'unknown'
-  print(f'loaded cached {label}: {abs_path} shape={shape} mtime={mtime}', flush=True)
+  print(f'loaded cached {label}: {path} shape={array.shape} mtime={mtime}', flush=True)
+  return array
+
+
+def _save_cached(cache_dir: str, filename: str, array: NDArray[Any]) -> None:
+  """Persist an array into the cache directory, creating it if needed."""
+  os.makedirs(cache_dir, exist_ok=True)
+  np.save(os.path.join(cache_dir, filename), array)
 
 
 def load_or_compute_jacobian(
@@ -50,13 +63,9 @@ def load_or_compute_jacobian(
   cache_dir: str = DEFAULT_CACHE_DIR,
 ) -> NDArray[np.float64]:
   """Load the cached reduced operator, or build and cache it from HDF5 matrices."""
-  cache_path = os.path.join(cache_dir, REAL_JACOBIAN_CACHE)
-  try:
-    real_jac = np.load(cache_path)
-    _report_cache_hit('reduced Jacobian', cache_path, real_jac.shape)
-    return real_jac
-  except (FileNotFoundError, OSError, ValueError):
-    pass
+  cached = _load_cached(cache_dir, REAL_JACOBIAN_CACHE, 'reduced Jacobian')
+  if cached is not None:
+    return cached
 
   mmat = HDF5Matrix(massmat_path, '/massmat')
   jac = HDF5Matrix(jacobian_path, '/jacobian')
@@ -88,9 +97,7 @@ def load_or_compute_jacobian(
   identity = np.eye(reduced_jac.shape[0], dtype=solved.dtype)
   real_jac = (solved - identity) / DEFAULT_TIMESTEP
 
-  os.makedirs(cache_dir, exist_ok=True)
-  np.save(cache_path, real_jac)
-  print(f'saved reduced Jacobian cache: {os.path.abspath(cache_path)}', flush=True)
+  _save_cached(cache_dir, REAL_JACOBIAN_CACHE, real_jac)
   return real_jac
 
 
@@ -102,20 +109,15 @@ def load_or_compute_eigvals(
   cache_dir: str = DEFAULT_CACHE_DIR,
 ) -> NDArray[np.complex128]:
   """Load cached eigenvalues, or compute and cache the spectrum and eigenvectors."""
-  cache_path = os.path.join(cache_dir, EIGVAL_CACHE)
-  try:
-    eigvals = np.load(cache_path)
-    _report_cache_hit('eigenvalues', cache_path, eigvals.shape)
-    return eigvals
-  except (FileNotFoundError, OSError, ValueError):
-    pass
+  cached = _load_cached(cache_dir, EIGVAL_CACHE, 'eigenvalues')
+  if cached is not None:
+    return np.asarray(cached, dtype=np.complex128)
 
   print('computing full eigenvalue spectrum with numpy.linalg.eigvals', flush=True)
   eigvals = np.asarray(np.linalg.eigvals(real_jac), dtype=np.complex128)
   _, eigvecs = sparse.linalg.eigs(real_jac, k=40, ncv=90, which='LM')
-  os.makedirs(cache_dir, exist_ok=True)
-  np.save(cache_path, eigvals)
-  np.save(os.path.join(cache_dir, EIGVEC_CACHE), eigvecs)
+  _save_cached(cache_dir, EIGVAL_CACHE, eigvals)
+  _save_cached(cache_dir, EIGVEC_CACHE, eigvecs)
 
   eigvec_dir = os.path.join(output_dir, 'eigvecs_plot')
   write_restart_eigenvectors(eigvecs, keep_global, nr_local, eigvec_dir)
@@ -133,13 +135,9 @@ def load_or_compute_schur(
   cache_dir: str = DEFAULT_CACHE_DIR,
 ) -> NDArray[np.complex128]:
   """Load the cached Schur factorisation, or compute and persist it."""
-  cache_path = os.path.join(cache_dir, SCHUR_CACHE)
-  try:
-    schur_t = np.load(cache_path)
-    _report_cache_hit('Schur factor', cache_path, schur_t.shape)
-    return schur_t
-  except (FileNotFoundError, OSError, ValueError):
-    pass
+  cached = _load_cached(cache_dir, SCHUR_CACHE, 'Schur factor')
+  if cached is not None:
+    return np.asarray(cached, dtype=np.complex128)
 
   print('computing schur factorization', flush=True)
   schur_raw, _ = scipy.linalg.schur(real_jac, output='complex')
@@ -149,5 +147,5 @@ def load_or_compute_schur(
   plt.scatter(schur_t.diagonal().real, schur_t.diagonal().imag, s=2, c='k')
   plt.savefig(os.path.join(cache_dir, SCHUR_PLOT))
   plt.close()
-  np.save(cache_path, schur_t)
+  _save_cached(cache_dir, SCHUR_CACHE, schur_t)
   return schur_t

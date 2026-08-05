@@ -18,7 +18,8 @@ the SLURM decks run it.
 uv sync                                          # create .venv (Python 3.14+)
 uv run ruff check . && uv run mypy && uv run pytest   # the full local gate
 uv run pytest tests/test_pseudospectrum.py -k closed_form   # a single test
-uv run nonmodal --help                           # console script
+uv run nonmodal run --help                       # sample a pseudospectrum
+uv run nonmodal plot --help                      # render a finished run
 uv run python -m nonmodal --help                 # equivalent
 ```
 
@@ -43,7 +44,12 @@ This repo is ground truth. Do not treat those copies as a compatibility constrai
 
 ## Architecture
 
-Pipeline stages, in `run_pipeline` ([pipeline.py](src/nonmodal/pipeline.py)):
+**Samples are flat everywhere.** A sample set is a 1-D complex array of points plus a
+1-D array of values — never a mesh. Structure is reintroduced only at plot time, by
+triangulating or interpolating. That is what keeps the pipeline free of the
+structured/unstructured branching it used to carry.
+
+`nonmodal run` ([pipeline.py](src/nonmodal/pipeline.py)):
 
 1. **Reduce** — `build_reduction_mapping` builds the keep-mask;
    `load_or_compute_jacobian` assembles global matrices and forms the effective
@@ -51,10 +57,14 @@ Pipeline stages, in `run_pipeline` ([pipeline.py](src/nonmodal/pipeline.py)):
    This turns the implicit time-advance into a linear operator worth analysing.
 2. **Factorise** — full eigenvalues, 40 eigenvectors (written out as `.rst` restart
    files), and the complex Schur factor `T` used for all sampling.
-3. **Sample** — for each grid point `z`, inverse-power iteration via `eigsh` on a
-   `LinearOperator` applying `(zI - T)^-* (zI - T)^-1` through LAPACK `trtrs`
-   triangular solves. `zI - T` is never materialised densely.
-4. **Emit** — `.npy` arrays, Plotly HTML, `run_metadata.json`.
+3. **Sample** — `config.source.build()` produces points; `sample_sigmin` evaluates
+   them. For each `z`, inverse-power iteration via `eigsh` on a `LinearOperator`
+   applying `(zI - T)^-* (zI - T)^-1` through LAPACK `trtrs` triangular solves.
+   `zI - T` is never materialised densely. Optionally `refine` grows the set.
+4. **Emit** — flat `.npy` arrays plus `run_metadata.json`.
+
+`nonmodal plot` reads that output directory back. It needs no HDF5, no operator and
+no caches, which is why `run` also saves `pseudo_eigvals.npy` for the overlay.
 
 ### Module map
 
@@ -63,12 +73,14 @@ Pipeline stages, in `run_pipeline` ([pipeline.py](src/nonmodal/pipeline.py)):
 | `matrices.py` | `HDF5Matrix`, `assemble_global` (numba) |
 | `fields.py` | 7-field block layout, reduction mask, restart output |
 | `operator.py` | reduced operator, eigenvalues, Schur factor, caching |
-| `grid.py` | grid geometry, flat-grid loading |
-| `pseudospectrum.py` | sigma_min sampling, fork-pool parallelism, contour levels |
-| `plotting.py` | Plotly heatmap and contour views |
-| `io.py` | run metadata, array output |
-| `pipeline.py` | `run_pipeline`, input validation |
-| `cli.py` | argparse surface, `main` |
+| `sampling.py` | `Bounds`, point sources, `uniform_points`, `mirror_conjugates` |
+| `refine.py` | error-driven Delaunay refinement |
+| `pseudospectrum.py` | `sample_sigmin`, fork-pool parallelism, contour levels |
+| `plotting.py` | tricontour contours, interpolated heatmap |
+| `io.py` | run metadata, flat sample IO |
+| `config.py` | frozen `RunConfig` / `PlotConfig` |
+| `pipeline.py` | `run_pipeline`, `plot_run` |
+| `cli.py` | argparse subcommands; the only module touching `Namespace` |
 
 ### Naming rule
 
@@ -91,13 +103,21 @@ the block layout lives in `fields.py` rather than a vendor-named module.
   `--cache-dir` are reused blindly; they are *not* invalidated when inputs,
   `DEFAULT_TIMESTEP` or `KEPT_BLOCK_IDS` change. Delete them by hand. Cache hits log
   path and mtime so stale reuse is visible in the log.
-- **Half-plane mirroring is conditional.** `compute_pseudospectrum` evaluates only the
-  upper half-plane when the imaginary axis is symmetric about zero, then mirrors. Valid
-  only for conjugate-symmetric spectra (true for the real reduced operator). An
-  arbitrary complex operator needs asymmetric imaginary bounds to force a full grid.
+- **Half-plane mirroring is decided by the operator, not the grid.** `run_pipeline`
+  checks `np.isrealobj(real_jac)`: a real operator has a conjugate-symmetric spectrum,
+  so only `Im z >= 0` is evaluated and `mirror_conjugates` recovers the rest.
+  `sample_sigmin` never mirrors on its own. `--no-half-plane` forces full sampling.
 - **`assemble_global` uses `inmat.shape[0]` for both loop bounds** — square input only.
   It now raises rather than silently mis-assembling.
-- **Plots use `include_plotlyjs='cdn'`** and render blank offline.
+- **Plots link plotly.js from a CDN** and render blank offline; `--plot-inline-js`
+  embeds it. Less pressing now that plotting is a separate command run off the node.
+- **`eigsh` gets a fixed `v0`** (`_start_vector`). ARPACK otherwise randomises the start
+  vector, which made runs irreproducible and intermittently failed a tolerance on the
+  ill-conditioned `bcsstk01`. Do not remove it to "simplify" the call.
+- **Adaptive refinement is opt-in** (`--refine-rounds`, default 0). Measured: 2.05x
+  lower interpolation error than uniform at equal budget on `west0479`, roughly a wash
+  on nearly-normal matrices. Contour-targeted weighting was tried and measured *worse*
+  in every case, so it was dropped — do not re-add it without evidence.
 
 ## Testing approach
 
@@ -112,6 +132,10 @@ Tests are analytic or reference-based, never golden-file.
    `sigma_min <= dist(z, spectrum)`, a theorem. `bcsstk01` is symmetric hence normal, so
    that bound is an equality there. The non-normal cases additionally assert a *strict*
    gap, so a bug returning eigenvalue distances would not pass.
+3. **Refinement earns its place** ([test_refine.py](tests/test_refine.py)) —
+   `test_adaptive_beats_uniform_at_equal_budget` requires lower interpolation error than
+   uniform sampling against a dense-SVD reference. It uses a Grcar matrix because that
+   reference is cheap. If it ever regresses, the feature is not paying for itself.
 
 `tests/matrixmarket.py` handles fetching: pinned sha256 per matrix, disk cache, and
 `urllib` needs an explicit `User-Agent` because math.nist.gov 403s the default one.

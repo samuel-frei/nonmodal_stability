@@ -22,6 +22,7 @@ os.environ.setdefault('OMP_NUM_THREADS', '1')
 os.environ.setdefault('MKL_NUM_THREADS', '1')
 os.environ.setdefault('OPENBLAS_NUM_THREADS', '1')
 
+from .config import PlotConfig, RunConfig  # noqa: E402
 from .fields import (  # noqa: E402
   FIELD_BLOCK_COUNT,
   FIELD_NAMES,
@@ -29,11 +30,11 @@ from .fields import (  # noqa: E402
   build_reduction_mapping,
   write_restart_eigenvectors,
 )
-from .grid import grid_bounds_from_flat, load_flat_grid_npy  # noqa: E402
 from .io import (  # noqa: E402
   build_metadata,
-  save_pseudospectrum_arrays,
-  save_pseudospectrum_flat,
+  load_samples,
+  read_metadata,
+  save_samples,
   write_metadata,
 )
 from .matrices import HDF5Matrix, assemble_global  # noqa: E402
@@ -43,11 +44,22 @@ from .operator import (  # noqa: E402
   load_or_compute_jacobian,
   load_or_compute_schur,
 )
-from .pipeline import run_pipeline  # noqa: E402
-from .plotting import pseudo_contours, pseudo_heatmap  # noqa: E402
+from .pipeline import plot_run, run_pipeline  # noqa: E402
+from .plotting import interpolate_to_mesh, pseudo_contours, pseudo_heatmap  # noqa: E402
 from .pseudospectrum import (  # noqa: E402
   choose_contour_levels,
   compute_pseudospectrum,
+  sample_sigmin,
+)
+from .refine import refine, triangle_errors  # noqa: E402
+from .sampling import (  # noqa: E402
+  Bounds,
+  FileSource,
+  RectangularSource,
+  load_flat_grid_npy,
+  mirror_conjugates,
+  near_square,
+  uniform_points,
 )
 
 __version__ = '0.1.0'
@@ -56,23 +68,36 @@ __all__ = [
   'DEFAULT_TIMESTEP',
   'FIELD_BLOCK_COUNT',
   'FIELD_NAMES',
-  'HDF5Matrix',
   'KEPT_BLOCK_IDS',
+  'Bounds',
+  'FileSource',
+  'HDF5Matrix',
+  'PlotConfig',
+  'RectangularSource',
+  'RunConfig',
   'assemble_global',
   'build_metadata',
   'build_reduction_mapping',
   'choose_contour_levels',
   'compute_pseudospectrum',
-  'grid_bounds_from_flat',
+  'interpolate_to_mesh',
   'load_flat_grid_npy',
   'load_or_compute_eigvals',
   'load_or_compute_jacobian',
   'load_or_compute_schur',
+  'load_samples',
+  'mirror_conjugates',
+  'near_square',
+  'plot_run',
   'pseudo_contours',
   'pseudo_heatmap',
+  'read_metadata',
+  'refine',
   'run_pipeline',
-  'save_pseudospectrum_arrays',
-  'save_pseudospectrum_flat',
+  'sample_sigmin',
+  'save_samples',
+  'triangle_errors',
+  'uniform_points',
   'write_metadata',
   'write_restart_eigenvectors',
 ]
