@@ -1,0 +1,71 @@
+[project]
+name = "nonmodal"
+version = "0.1.0"
+description = "Nonmodal (pseudospectral) stability analysis of reduced linear MHD operators"
+readme = "README.md"
+authors = [
+    { name = "Samuel Freiberger", email = "swf2112@columbia.edu" }
+]
+requires-python = ">=3.14"
+dependencies = [
+    "h5py>=3.16",
+    "matplotlib>=3.11",
+    "numba>=0.66",
+    "numpy>=2.4",
+    "plotly>=6.0",
+    "scipy>=1.18",
+]
+
+[project.scripts]
+nonmodal = "nonmodal.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.12.1,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "ipykernel>=7.3.0",
+    "mypy>=1.14",
+    "pytest>=8.0",
+    "ruff>=0.9",
+    "scipy-stubs>=1.15",
+]
+
+[tool.ruff]
+# Match the existing house style: 2-space indents, single quotes.
+line-length = 100
+indent-width = 2
+
+[tool.ruff.format]
+quote-style = "single"
+indent-style = "space"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+# Loop variables named for maths conventions (R, C, T) are intentional.
+ignore = ["E741"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+markers = [
+    "network: downloads a matrix from the NIST Matrix Market (cached; skipped when offline)",
+]
+filterwarnings = [
+    # scipy.io.mmread warns that its default return type is changing in 1.20.
+    # The loader handles both sparse and dense returns already.
+    "ignore:The default value for `spmatrix`:DeprecationWarning",
+]
+
+[tool.mypy]
+python_version = "3.14"
+packages = ["nonmodal"]
+disallow_untyped_defs = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+
+# numba and plotly ship no type stubs; h5py's are partial.
+[[tool.mypy.overrides]]
+module = ["numba.*", "plotly.*", "h5py.*"]
+ignore_missing_imports = true

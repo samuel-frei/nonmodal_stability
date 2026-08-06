@@ -1,13 +1,47 @@
+# Run outputs
+*.npy
+*.h5
+*.html
+*.png
 *.rst
 *.xmf
-*.npy
 *.out
-*.h5
 *.log
-*.html
-*.json
 *.hist
-*.png
 *.ini
-harris_linear_20x6z/data/
-harris_linear_20x6z/eigvecs_plot/
+run_metadata.json
+eigvecs_plot/
+pseudospectrum/
+cases/*/data/
+cases/*/eigvecs_plot/
+
+# Keep committed case inputs and any test fixtures, which the broad output
+# patterns above would otherwise swallow. Note upstream ignored *.json outright,
+# which would also have hidden future config files; only run_metadata.json is
+# ignored now.
+#
+# These negations are deliberately narrow: a blanket `!tests/**` would also
+# re-include tests/__pycache__.
+!tests/**/*.npy
+!tests/**/*.h5
+!tests/**/*.json
+!cases/**/*.xml
+!cases/**/*.in
+!cases/harris_linear/circle_2d.h5
+
+# Python
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Tooling caches
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Matrices downloaded from the NIST Matrix Market by the test suite.
+tests/_data/
