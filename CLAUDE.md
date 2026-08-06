@@ -42,6 +42,22 @@ Two stale copies exist outside this repo and are **not** authoritative:
 
 This repo is ground truth. Do not treat those copies as a compatibility constraint.
 
+## Where the real data lives
+
+Nothing in this repo; the exports sit under `research/recon_data/psc_data/`.
+
+- `harris_linear_20x6z/{pseudo_marginal,pseudo_hires,pseudo_hhres,pseudo_hhhres,
+  margin_finding}/` — the production runs, Apr 2026. Reduced operator is
+  **10500x10500** (`real_jacobian.npy` 882 MB, `full_reduced_schur.npy` 1.76 GB).
+  `pseudo_hhhres` is newest and has plots.
+- Those runs saved `pseudo_R/C/sigmin.npy` — the **old structured mesh**.
+  `nonmodal plot` expects flat `pseudo_z.npy` + `pseudo_sigmin.npy`, so it cannot
+  read them without converting: `z = (R + 1j*C).ravel()`.
+- `harris_linear/lin_ops.h5` is **not loadable** by `HDF5Matrix`: it lacks
+  `nrg`, `ncg` and `lg`, and its dimensions (51247 = 7x7321) say it is a
+  pre-assembled *global* matrix rather than the local-plus-scatter layout the
+  reader assumes. The `20x6z` exports are the ones that match.
+
 ## Architecture
 
 **Samples are flat everywhere.** A sample set is a 1-D complex array of points plus a
