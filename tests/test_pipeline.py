@@ -55,9 +55,10 @@ def test_half_plane_does_not_shrink_the_refinement_budget() -> None:
     source=SpectrumSource(nx=8, ny=8), nprocs=2,
     refine_points=30, refine_rounds=2)
 
-  points, _ = _sample(config, _resolved(eigvals, 8, 8), T, half_plane=True)
+  resolved = _resolved(eigvals, 8, 8)
+  points, _ = _sample(config, resolved, T, half_plane=True)
 
-  # The 8x8 grid keeps only its Im z >= 0 half before refinement starts.
-  seeded = 8 * 4
+  # Half-plane sampling keeps only Im z >= 0 rows before refinement starts.
+  seeded = int(np.count_nonzero(resolved.build().imag >= 0.0))
   assert np.all(points.imag >= 0.0), 'half-plane sampling must stay above the axis'
   assert seeded < points.size <= seeded + 30
