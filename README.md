@@ -91,7 +91,13 @@ features, not to sweep a chosen box at high resolution. `--bounds-pad`
 eigenvalues, and the box it picks is logged.
 
 **Resolution is asked for as dimensions, not a total.** `--grid-nx` and
-`--grid-ny` give the initial lattice (default 24x24). Keep it coarse.
+`--grid-ny` give the initial lattice (default 25x25). Keep it coarse.
+
+`Im z = 0` is always one of the sampled rows: a real operator's pseudospectrum
+is symmetric about the real axis and its contours pinch there, so it is the last
+line you want to step over. `--grid-ny` is odd by default so the axis is a
+lattice point with even spacing either side; an even value still lands on the
+axis, at slightly uneven spacing.
 
 **`--refine-points N` is how you reach resolution.** It spends *up to* `N`
 further evaluations on top of the initial grid, inserting them where a linear

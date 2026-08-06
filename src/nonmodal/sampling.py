@@ -61,12 +61,47 @@ class Bounds:
     }
 
 
+def _axis_through_zero(lo: float, hi: float, n: int) -> NDArray[np.float64]:
+  """`n` points spanning [lo, hi], with an exact 0.0 when the span straddles it.
+
+  Two things go wrong with a plain `linspace` here. An even `n` steps over zero
+  entirely, and an odd `n` can land on something like 8.9e-16 instead of 0.0
+  through ordinary rounding. Both matter downstream: the half-plane filter tests
+  `imag >= 0` and `mirror_conjugates` tests `imag != 0`, so a near-zero row gets
+  duplicated into a pair of points ~1e-15 apart, which is a degenerate
+  triangulation waiting to happen.
+
+  Building each side separately and splicing an exact zero between them avoids
+  both. `n` is honoured exactly; only the spacing shifts, and only when needed.
+  """
+  if lo >= 0.0 or hi <= 0.0:
+    return np.linspace(lo, hi, n)
+  if n == 1:
+    return np.zeros(1)
+
+  # Split the interior points between the two sides in proportion to their
+  # widths, so the spacing stays as even as the counts allow.
+  interior = n - 1
+  below = int(round(interior * (-lo) / (hi - lo)))
+  below = min(max(below, 1), interior - 1) if interior >= 2 else interior
+  above = interior - below
+
+  negative = np.linspace(lo, 0.0, below + 1)[:-1] if below else np.empty(0)
+  positive = np.linspace(0.0, hi, above + 1)[1:] if above else np.empty(0)
+  return np.concatenate([negative, np.zeros(1), positive])
+
+
 def uniform_points(bounds: Bounds, nx: int, ny: int) -> NDArray[np.complex128]:
-  """A flat uniform lattice covering `bounds`, including its edges."""
+  """A flat uniform lattice covering `bounds`, including its edges.
+
+  When the region straddles the real axis, `Im z = 0` is always one of the
+  sampled rows: a real operator's pseudospectrum is symmetric about it and its
+  contours pinch there, so it is the last line you want to step over.
+  """
   if nx < 1 or ny < 1:
     raise ValueError('nx and ny must be >= 1')
   x = np.linspace(bounds.real_min, bounds.real_max, nx)
-  y = np.linspace(bounds.imag_min, bounds.imag_max, ny)
+  y = _axis_through_zero(bounds.imag_min, bounds.imag_max, ny)
   X, Y = np.meshgrid(x, y)
   return np.asarray((X + 1j * Y).ravel(), dtype=np.complex128)
 
@@ -98,8 +133,11 @@ def load_flat_grid_npy(path: str) -> NDArray[np.complex128]:
 
 
 DEFAULT_BOUNDS_PAD = 0.3
-DEFAULT_GRID_NX = 24
-DEFAULT_GRID_NY = 24
+DEFAULT_GRID_NX = 25
+#: Odd, so that on a region straddling the real axis the zero row is a lattice
+#: point and the spacing stays exactly even. An even count still puts a sample
+#: on the axis -- see `_axis_through_zero` -- but at ~9% spacing spread.
+DEFAULT_GRID_NY = 25
 
 
 @dataclass(frozen=True)

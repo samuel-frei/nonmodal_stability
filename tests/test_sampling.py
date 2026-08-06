@@ -54,6 +54,53 @@ def test_uniform_points_covers_corners() -> None:
   assert z.imag.max() == pytest.approx(2.0)
 
 
+@pytest.mark.parametrize('ny', [1, 2, 3, 4, 5, 8, 23, 24, 25, 40])
+def test_real_axis_is_always_sampled(ny: int) -> None:
+  """Im z = 0 must be an exact sample row whenever the region straddles it.
+
+  A real operator's pseudospectrum is symmetric about the real axis and its
+  contours pinch there. A plain linspace steps over zero for even ny, and for
+  some odd ny lands on ~9e-16 instead of exactly 0.0.
+  """
+  z = uniform_points(Bounds(-1.0, 1.0, -6.4, 6.4), nx=3, ny=ny)
+  rows = np.unique(z.imag)
+
+  assert rows.size == ny, 'the requested row count must be honoured exactly'
+  assert np.count_nonzero(rows == 0.0) == 1, 'exactly one row must be exact zero'
+
+
+@pytest.mark.parametrize('ny', [3, 5, 25])
+def test_odd_row_counts_keep_even_spacing(ny: int) -> None:
+  """With an odd count the axis is a lattice point, so nothing is distorted."""
+  rows = np.unique(uniform_points(Bounds(-1.0, 1.0, -6.4, 6.4), nx=2, ny=ny).imag)
+  spacing = np.diff(rows)
+  np.testing.assert_allclose(spacing, spacing[0])
+
+
+def test_region_not_straddling_the_axis_is_untouched() -> None:
+  """The zero-splicing must not perturb a box that never crosses the axis."""
+  z = uniform_points(Bounds(-1.0, 1.0, 0.5, 2.0), nx=3, ny=5)
+  np.testing.assert_allclose(np.unique(z.imag), np.linspace(0.5, 2.0, 5))
+
+
+@pytest.mark.parametrize('ny', [4, 23, 24, 25])
+def test_half_plane_then_mirror_produces_no_near_duplicates(ny: int) -> None:
+  """A near-zero row would be mirrored into a pair ~1e-15 apart.
+
+  That pair is both a wasted evaluation and a degenerate triangulation waiting
+  to happen, so the axis row has to be exactly zero.
+  """
+  z = uniform_points(Bounds(-1.0, 1.0, -6.4, 6.4), nx=3, ny=ny)
+  upper = z[z.imag >= 0.0]
+  mirrored, _ = mirror_conjugates(upper, np.ones(upper.size))
+
+  assert np.unique(mirrored).size == mirrored.size, 'mirroring duplicated a point'
+  rows = np.unique(mirrored.imag)
+  assert np.min(np.diff(rows)) > 1e-6, 'two rows collapsed onto the axis'
+  # The mirrored set is symmetric about the axis.
+  np.testing.assert_allclose(np.sort(rows), -np.sort(-rows)[::-1])
+
+
 def test_mirror_conjugates_reflects_without_duplicating_the_axis() -> None:
   z = np.array([1 + 1j, 2 + 0j], dtype=np.complex128)
   s = np.array([10.0, 20.0])

@@ -108,6 +108,13 @@ the block layout lives in `fields.py` rather than a vendor-named module.
   `--cache-dir` are reused blindly; they are *not* invalidated when inputs,
   `DEFAULT_TIMESTEP` or `KEPT_BLOCK_IDS` change. Delete them by hand. Cache hits log
   path and mtime so stale reuse is visible in the log.
+- **`Im z = 0` is always a sample row** when the region straddles it
+  (`_axis_through_zero`). A plain `linspace` steps over zero for even `ny`, and for
+  some odd `ny` lands on ~9e-16 instead of 0.0 — which the half-plane filter
+  (`imag >= 0`) and `mirror_conjugates` (`imag != 0`) then disagree about, turning
+  one row into a duplicated pair ~1e-15 apart. `DEFAULT_GRID_NY` is odd so the axis
+  is a lattice point and spacing stays even; an even `ny` still hits the axis, at
+  ~9% spacing spread.
 - **Half-plane mirroring is decided by the operator, not the grid.** `run_pipeline`
   checks `np.isrealobj(real_jac)`: a real operator has a conjugate-symmetric spectrum,
   so only `Im z >= 0` is evaluated and `mirror_conjugates` recovers the rest.

@@ -4,7 +4,12 @@ import pytest
 
 from nonmodal.cli import parse_args, plot_config_from_args, run_config_from_args
 from nonmodal.config import PlotConfig, RunConfig
-from nonmodal.sampling import FileSource, SpectrumSource
+from nonmodal.sampling import (
+  DEFAULT_GRID_NX,
+  DEFAULT_GRID_NY,
+  FileSource,
+  SpectrumSource,
+)
 
 
 def _run(*extra: str) -> RunConfig:
@@ -33,7 +38,9 @@ def test_the_region_always_comes_from_the_spectrum() -> None:
   source = _run().source
   assert isinstance(source, SpectrumSource)
   assert source.pad == pytest.approx(0.3)
-  assert (source.nx, source.ny) == (24, 24)
+  assert (source.nx, source.ny) == (DEFAULT_GRID_NX, DEFAULT_GRID_NY)
+  # ny is odd so the real axis is a lattice row with even spacing either side.
+  assert DEFAULT_GRID_NY % 2 == 1
 
 
 @pytest.mark.parametrize('flag', ['--real-min', '--real-max', '--imag-min',
