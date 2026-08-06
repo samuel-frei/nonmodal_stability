@@ -26,7 +26,7 @@ cd "${SLURM_SUBMIT_DIR:-$PWD}"
 RUN="${RUN:-nonmodal}"
 
 srun ${RUN} run \
-  --grid-nx 24 --grid-ny 24 \
+  --grid-nx 25 --grid-ny 25 \
   --refine-points 2600 \
   --nprocs "${SLURM_CPUS_PER_TASK:-16}" \
   --run-tag "${SLURM_JOB_NAME:-default}" \
@@ -45,5 +45,6 @@ srun ${RUN} run \
 #
 # The sampled region is always derived from the spectrum; widen or narrow it
 # with --bounds-pad. Resolution comes from refinement rather than a fine initial
-# lattice: 24x24 = 576 points to start, then 2600 more placed where the field
-# actually varies, for ~3176 evaluations total.
+# lattice: a 25x25 lattice to start -- of which only the upper half is evaluated,
+# since the operator is real -- then up to 2600 more points placed where the
+# field actually varies. Im z = 0 is always one of the sampled rows.

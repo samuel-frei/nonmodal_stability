@@ -69,7 +69,7 @@ different requirements. `run` needs the HDF5 matrices and a machine with cores;
 ```bash
 # On the cluster, from a directory containing the input files.
 # Start coarse, then spend the rest of the budget refining onto features.
-uv run nonmodal run --grid-nx 24 --grid-ny 24 --refine-points 2600 --nprocs 32
+uv run nonmodal run --grid-nx 25 --grid-ny 25 --refine-points 2600 --nprocs 32
 
 # Anywhere afterwards -- no HDF5, no operator, no caches:
 uv run nonmodal plot --output-dir pseudospectrum --min-level 1e-7 --nlevels 16
@@ -110,7 +110,7 @@ roughly halves interpolation error on a strongly non-normal operator (2.05x on
 `N` is a ceiling rather than a promise: a round inserts at most one point per
 triangle, and an *n*-point set triangulates into roughly 2*n* triangles, so one
 round can only about triple it. A run that finishes short says so in the log.
-Four rounds comfortably covers the 24x24 → +2600 case.
+Four rounds comfortably covers the 25x25 → +2600 case.
 
 If the reduced operator is real — it is — its spectrum is conjugate-symmetric,
 so only the upper half-plane is evaluated and the rest follows by conjugation.
