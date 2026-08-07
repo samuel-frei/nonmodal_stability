@@ -1,18 +1,13 @@
 """Error-driven adaptive refinement of a sample set.
 
-Take the coarse initial grid, triangulate it, and repeatedly insert points into
-the triangles where a linear interpolant of log10(sigma_min) is worst. This is
-the intended way to reach resolution: start coarse, then spend evaluations only
-where the field actually varies.
+Triangulate the coarse grid, then insert points where a linear interpolant of
+log10(sigma_min) is worst -- the interpolant `plotting.py` contours with, so the
+indicator estimates the error actually visible in the plot. Measured against a
+dense-SVD reference at equal budget: ~2x better than uniform on west0479,
+roughly a wash on nearly-normal operators.
 
-Why this indicator: contours are drawn by linearly interpolating over a Delaunay
-triangulation (see plotting.py), so `area * spread(log10 sigma_min)` estimates
-precisely the error that ends up visible in the plot. Working in log10 makes it
-scale-free across the many orders of magnitude sigma_min covers.
-
-Measured against a dense-SVD reference at equal point budget, this beats uniform
-sampling by ~2x on a strongly non-normal operator (west0479, normality defect
-0.63) and is roughly a wash on nearly-normal ones.
+* `triangle_errors` -- per-triangle indicator, `area * spread of values`.
+* `refine` -- grow a sample set toward a budget, worst triangles first.
 """
 
 from collections.abc import Callable
@@ -51,19 +46,11 @@ def refine(
 ) -> tuple[NDArray[np.complex128], NDArray[np.float64]]:
   """Grow a sample set toward `budget` points, worst-error triangles first.
 
-  `budget` is a **ceiling, not a guarantee**. It is never exceeded, but a run
-  can finish short of it because only one point is inserted per triangle per
-  round: a set of n points triangulates into roughly 2n triangles, so a single
-  round can at most about triple it. Several rounds are the way to spend a large
-  budget. Duplicate centroids are dropped too, which costs a few more.
-
-  `sample` evaluates a batch of new points; each round issues exactly one call
-  so the worker pool stays saturated. Returns the combined points and values.
-
-  Degenerate inputs (too few points, collinear seeds, a triangulation Qhull
-  refuses) end refinement early and return what has been sampled so far, rather
-  than aborting a long-running job.
+  `budget` is a ceiling: one insertion per triangle per round caps each round.
   """
+  # One `sample` call per round keeps the worker pool saturated. Degenerate
+  # input -- too few points, collinear seeds, a triangulation Qhull refuses --
+  # ends refinement early rather than aborting a long-running job.
   if rounds < 1 or budget <= points.size:
     return points, sigmin
 

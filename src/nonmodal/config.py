@@ -1,8 +1,12 @@
 """Fully resolved run configuration.
 
-These carry no `None` and no `argparse.Namespace`: the CLI resolves everything
-once, and the pipeline reads plain fields. Validation happens at construction,
-so an invalid run fails before any matrix is loaded.
+No `None` and no `argparse.Namespace`: the CLI resolves everything once and the
+pipeline reads plain fields. Validation happens at construction, so an invalid
+run fails before any matrix is loaded.
+
+* `RunConfig` -- everything `nonmodal run` needs.
+* `PseudomodeConfig` -- everything `nonmodal pseudomode` needs.
+* `PlotConfig` -- everything `nonmodal plot` needs.
 """
 
 from dataclasses import dataclass, field
@@ -29,17 +33,13 @@ class RunConfig:
   cache_dir: str = '.'
   output_dir: str = 'pseudospectrum'
   nprocs: int = 128
-  #: Ceiling on extra evaluations refinement may spend on top of the initial
-  #: grid; zero disables it. Not a guarantee -- see `refine.refine`.
+  #: Ceiling on extra evaluations refinement may spend; 0 disables it.
   refine_points: int = 0
-  #: How many rounds to spread `refine_points` over. More rounds adapt more
-  #: closely, at one worker-pool round trip each.
+  #: Rounds to spread `refine_points` over, one worker-pool trip each.
   refine_rounds: int = DEFAULT_REFINE_ROUNDS
-  #: Force full-plane sampling even when the operator is real. Half-plane
-  #: sampling is otherwise chosen automatically from the operator itself.
+  #: Force full-plane sampling; otherwise decided from the operator itself.
   force_full_plane: bool = False
-  #: Timestep of the implicit solve that produced the Jacobian. It defines the
-  #: effective operator, so it must match the simulation that exported it.
+  #: Timestep of the implicit solve; it defines the effective operator.
   timestep: float = DEFAULT_TIMESTEP
   #: How many eigenvectors to compute and write out as restart files.
   n_eigvecs: int = DEFAULT_N_EIGVECS
@@ -63,8 +63,7 @@ class RunConfig:
 class PseudomodeConfig:
   """Everything `nonmodal pseudomode` needs.
 
-  Needs the Schur factor *and* its vectors, so unlike `plot` it is a compute
-  command; but it takes the point `z` as given rather than searching for one.
+  A compute command, but each point `z` is given rather than searched for.
   """
 
   #: The points to extract modes at, given explicitly.
@@ -73,11 +72,9 @@ class PseudomodeConfig:
   massmat: str = './mass_mat.h5'
   cache_dir: str = '.'
   output_dir: str = 'pseudospectrum'
-  #: Subdirectory of `output_dir` for the restart files, kept apart from
-  #: `eigvecs_plot/` so the two cannot overwrite one another.
+  #: Subdirectory for the restarts, kept apart from `eigvecs_plot/`.
   mode_dir: str = DEFAULT_MODE_DIR
-  #: Restart files written per mode. 1 uses the amplitude-maximising phase;
-  #: more sweep the phase, which reads back as an animation.
+  #: Restart files per mode; 1 is the amplitude-maximising phase.
   phases: int = 1
   tol: float = DEFAULT_MODE_TOL
   timestep: float = DEFAULT_TIMESTEP
@@ -99,16 +96,14 @@ class PseudomodeConfig:
 class PlotConfig:
   """Everything `nonmodal plot` needs.
 
-  It reads a finished run directory, so it never touches HDF5 input, the
-  operator, or the caches.
+  Reads a finished run directory: no HDF5, no operator, no caches.
   """
 
   output_dir: str = 'pseudospectrum'
   plot_name: str = 'pseudoplot_default.html'
   nlevels: int = DEFAULT_NLEVELS
   min_level: float = DEFAULT_MIN_LEVEL
-  #: Side length of the regular mesh the heatmap interpolates onto. Contours do
-  #: not use it -- they are drawn from the samples themselves.
+  #: Side length of the heatmap's mesh; contours do not use it.
   mesh: int = DEFAULT_PLOT_MESH
   #: Embed plotly.js instead of linking the CDN, so plots render offline.
   inline_js: bool = False

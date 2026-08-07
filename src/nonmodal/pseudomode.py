@@ -1,33 +1,14 @@
 """Pseudomodes: the vector a near-singular resolvent actually amplifies.
 
-For a point `z`, the pseudomode is the right singular vector `v` of `zI - A`
-belonging to `sigma_min`. It satisfies
+The pseudomode at `z` is the right singular vector of `zI - A` belonging to
+`sigma_min`, so it satisfies `||(A - zI)v|| = sigma_min`: an approximate
+eigenvector with a known residual. It comes out of the same inverse iteration
+the sampler runs -- which discards it -- and reaches the physical basis as
+`v_A = Z v_T`, since sigma_min is invariant under `A = Z T Z*` but its singular
+vectors are not.
 
-    ||(A - zI) v|| = sigma_min(zI - A)
-
-so it is an approximate eigenvector carrying a known residual. On a strongly
-non-normal operator `sigma_min` is tiny far from any eigenvalue, and `v` is then
-a direction the operator very nearly leaves invariant even though `z` is nowhere
-near the spectrum.
-
-This runs the same inverse iteration the sampler does, at the requested point:
-`sigma_min` and its eigenvector come out of one `eigsh` call on
-`(zI - T)^-1 (zI - T)^-H = V Sigma^-2 V*`, and that eigenvector *is* the
-pseudomode. Sampling discarded it as `vals, _`; `sigmin_with_mode` keeps it.
-
-So the vector is free relative to the value -- ARPACK produces both -- but the
-solve itself is not free. Sampled vectors are not stored, so a mode costs a
-fresh iteration (~110 matvecs at the default tolerance, two triangular solves
-each) even at a point the run already visited.
-
-The genuinely new step is the change of basis. `sigma_min` is invariant under
-`A = Z T Z*`, but singular vectors are not, so the Schur vectors carry the
-result back:
-
-    v_A = Z v_T
-
-`Z` is produced by the same `scipy.linalg.schur` call that produces `T` and is
-cached alongside it (`operator.SCHURVEC_CACHE`).
+* `Pseudomode` -- one mode: the point, sigma_min, the vector, the residual.
+* `pseudomode_at` -- extract the mode at a point, in the physical basis.
 """
 
 from dataclasses import dataclass
@@ -46,9 +27,7 @@ class Pseudomode:
   sigma_min: float
   #: Unit vector in the reduced physical basis that `keep_global` indexes.
   vector: NDArray[np.complex128]
-  #: ||(A - zI) v||, which must equal sigma_min. Evaluated from the operator
-  #: rather than the inverse iteration, so it checks the solve instead of
-  #: restating it.
+  #: ||(A - zI) v||, which must equal sigma_min; checks the solve.
   residual: float
 
   def describe(self) -> dict[str, object]:
@@ -73,8 +52,7 @@ def pseudomode_at(
 ) -> Pseudomode:
   """The pseudomode at `z`, returned in the physical basis.
 
-  `schur_t` and `schur_z` are the two halves of `A = Z T Z*`, as produced by
-  `operator.load_or_compute_schur_vectors`.
+  `schur_t`, `schur_z` are the halves of `A = Z T Z*`.
   """
   if schur_t.shape != schur_z.shape:
     raise ValueError(
@@ -82,8 +60,7 @@ def pseudomode_at(
 
   sigma, mode_t = sigmin_with_mode(z, schur_t, tol=tol)
 
-  # Residual in the Schur basis. Z is unitary, so ||(T - zI) v_T|| is exactly
-  # ||(A - zI) v_A|| -- checked without touching the n-by-n physical operator.
+  # Z is unitary, so ||(T - zI) v_T|| is exactly ||(A - zI) v_A||.
   residual = float(np.linalg.norm(schur_t @ mode_t - z * mode_t))
   vector = np.asarray(schur_z @ mode_t, dtype=np.complex128)
   return Pseudomode(

@@ -1,8 +1,12 @@
 """Field-block layout of the global state vector, and restart output.
 
-The global state vector is a concatenation of `FIELD_BLOCK_COUNT` equally sized
-field blocks named by `FIELD_NAMES`. Reduction keeps only `KEPT_BLOCK_IDS` and
-drops boundary-condition rows.
+The state vector is `FIELD_BLOCK_COUNT` equally sized blocks named by
+`FIELD_NAMES`; reduction keeps `KEPT_BLOCK_IDS` and drops boundary rows.
+
+* `build_reduction_mapping` -- the boolean mask that reduces a global matrix.
+* `aligned_phase` -- the phase at which a complex mode carries most amplitude.
+* `write_restart_eigenvectors` -- eigenvectors out as `.rst`, one per vector.
+* `write_restart_modes` -- complex modes out as `.rst`, optionally phase-swept.
 """
 
 import os
@@ -57,16 +61,14 @@ def _write_restart(
   values: NDArray[np.floating],
   keep_global: NDArray[np.bool_],
 ) -> str:
-  """Scatter one reduced real vector into the global layout and write it out.
-
-  `t` is the file's own index rather than a physical time, which is what lets a
-  directory of these be read back as a sequence.
-  """
+  """Scatter one reduced real vector into the global layout and write it out."""
   global_vec = np.zeros((keep_global.shape[0],), dtype=np.float64)
   global_vec[keep_global] = values
   # Separate the global state vector into its field blocks.
   blocks = np.split(global_vec, FIELD_BLOCK_COUNT)
   path = f'{out_dir}/xmhd2d_{index:05d}.rst'
+  # `t` is the file index, not a physical time: that is what lets a directory of
+  # these be read back as a sequence.
   with h5py.File(path, 'w') as f:
     f.create_dataset('OFT_idx_Version', data=np.array([1], dtype=np.int32))
     f.create_dataset('t', data=np.array([float(index)], dtype=np.float64))
@@ -77,14 +79,10 @@ def _write_restart(
 
 
 def aligned_phase(vec: NDArray[np.complexfloating]) -> float:
-  """The phase `theta` maximising `||Re(vec * exp(-i*theta))||`.
-
-  A complex mode has an arbitrary overall phase -- ARPACK's is whatever the
-  iteration happened to land on -- so taking the real part directly can discard
-  most of the amplitude, in the worst case all of it. Writing
-  `Re(v) cos(theta) + Im(v) sin(theta)` and maximising over `theta` gives
-  `tan(2*theta) = 2 a.b / (a.a - b.b)` for `a = Re v`, `b = Im v`.
-  """
+  """The phase `theta` maximising `||Re(vec * exp(-i*theta))||`."""
+  # A complex mode's overall phase is arbitrary, so taking Re() directly can
+  # discard most of the amplitude. Maximising Re(v)cos(t) + Im(v)sin(t) gives
+  # tan(2t) = 2 a.b / (a.a - b.b).
   a = np.asarray(vec.real, dtype=np.float64)
   b = np.asarray(vec.imag, dtype=np.float64)
   return 0.5 * float(np.arctan2(2.0 * float(a @ b), float(a @ a) - float(b @ b)))
@@ -98,9 +96,7 @@ def write_restart_eigenvectors(
 ) -> None:
   """Write reduced eigenvectors as restart files, one per eigenvector.
 
-  Takes the real part as-is, at whatever phase the eigensolver produced. Kept
-  exactly as it was so existing runs stay reproducible; `write_restart_modes`
-  is the phase-aware path.
+  Real part at the eigensolver's phase; `write_restart_modes` is phase-aware.
   """
   _check_restart_shapes(eigvecs, keep_global, nr_local)
   os.makedirs(out_dir, exist_ok=True)
@@ -117,12 +113,7 @@ def write_restart_modes(
 ) -> list[str]:
   """Write complex modes as restart files, optionally sweeping their phase.
 
-  `phases=1` writes one file per mode at the phase carrying the most amplitude.
-  Larger values sweep `[0, 2*pi)` from that phase, and since `_write_restart`
-  stores each file's index as `t`, the directory reads back as a time series --
-  a travelling mode animates with no change to the format.
-
-  Returns the paths written, in order.
+  `phases=1` is the amplitude-maximising phase; more sweep it. Returns paths.
   """
   _check_restart_shapes(vectors, keep_global, nr_local)
   if phases < 1:

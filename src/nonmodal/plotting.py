@@ -1,14 +1,13 @@
 """Interactive Plotly views built from scattered pseudospectrum samples.
 
-Samples arrive as a flat point set, so structure is reintroduced here:
+Samples arrive flat, so structure is reintroduced here: contours from
+`tricontour` on a Delaunay triangulation of the samples themselves, the heatmap
+by interpolation because a raster needs a mesh. Both work in log10(sigma_min),
+which spans orders of magnitude and would otherwise misplace the contours.
 
-* contours come from `matplotlib.tri.tricontour` on a Delaunay triangulation of
-  the actual samples, so no interpolation error is introduced where it matters;
-* the heatmap interpolates onto a regular mesh, because a raster needs one.
-
-Both work in log10(sigma_min). Interpolating the raw value would misplace
-exactly the contours of interest: sigma_min spans orders of magnitude, dropping
-to ~3e-4 of the eigenvalue distance on a strongly non-normal operator.
+* `pseudo_contours` -- contours drawn directly from the sampled points.
+* `pseudo_heatmap` -- a raster, via interpolation onto a regular mesh.
+* `interpolate_to_mesh` -- that interpolation, exposed for library callers.
 """
 
 import os

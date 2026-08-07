@@ -1,12 +1,14 @@
 """Pseudospectrum sampling: sigma_min(zI - T) at arbitrary complex points.
 
-Sampling is parallelised with a `fork` pool. The Schur factor is published to
-module globals in the parent so workers inherit it through the fork rather than
-pickling a dense matrix per task.
+One primitive, `sample_sigmin`, evaluates a flat array of points; everything
+else is a question of *which* points to hand it (sampling.py, refine.py). It is
+parallelised with a `fork` pool, the Schur factor reaching workers through
+inherited module globals rather than being pickled per task.
 
-There is one primitive, `sample_sigmin`, which evaluates a flat array of points.
-Everything else -- uniform grids, adaptive refinement, half-plane mirroring --
-is a question of *which* points to hand it, and lives in sampling.py/refine.py.
+* `sample_sigmin` -- evaluate a flat point set in parallel.
+* `sigmin_with_mode` -- one point, keeping the eigenvector as well.
+* `compute_pseudospectrum` -- convenience wrapper returning `(R, C, sigmin)`.
+* `choose_contour_levels` -- geometric levels spanning the sampled values.
 """
 
 import functools
@@ -37,9 +39,7 @@ def _init_worker_from_parent() -> None:
   _worker_trtrs = cast(Callable[..., Any], funcs[0] if isinstance(funcs, list) else funcs)
 
 
-#: Seed for the deterministic ARPACK start vector. Any fixed vector works; a
-#: pseudo-random one avoids the accidental orthogonality an all-ones vector can
-#: hit on structured operators.
+#: Pseudo-random, to dodge the orthogonality an all-ones vector can hit.
 _START_VECTOR_SEED = 20260805
 
 
@@ -54,23 +54,14 @@ def _shifted_resolvent_operator(
   T: NDArray[np.complexfloating],
   trtrs: Callable[..., Any],
 ) -> sparse.linalg.LinearOperator:
-  """`((zI - T)* (zI - T))^-1`, applied through triangular solves.
-
-  The standard formulation, following Wright & Trefethen (2001) §2: compute
-  `sigma_min(zI - T) = sqrt(lambda_min((zI - T)* (zI - T)))` by inverse
-  iteration on that Gram matrix, which they note can be "solved in two stages,
-  each using triangular system solves". Solving `M* y = q` then `M x = y` gives
-  `x = M^-1 M^-H q`, which is the order below.
-
-  Writing `M = U Sigma V*`, `(M* M)^-1 = V Sigma^-2 V*`. So the dominant
-  eigenvalue is `1/sigma_min^2` -- all the sampler wants -- and the dominant
-  eigenvector is the *right* singular vector, the pseudomode at `z`. Both are
-  properties of `M* M`, not of how the two stages were arranged.
-
-  Arranging them the other way computes `(M M*)^-1`. Its eigenvalues are the
-  same, so `sigma_min` is unaffected and no sampling test would notice, but its
-  eigenvector is the left singular vector instead.
-  """
+  """`((zI - T)* (zI - T))^-1`, applied through triangular solves."""
+  # Wright & Trefethen (2001) §2: sigma_min = sqrt(lambda_min(M* M)) by inverse
+  # iteration, "solved in two stages, each using triangular system solves".
+  # Solving M* y = q then M x = y is x = M^-1 M^-H q, which is (M* M)^-1. Its
+  # eigenvector is therefore the right singular vector -- the pseudomode -- a
+  # property of M*M and not of the ordering. The other arrangement gives
+  # (M M*)^-1: identical eigenvalues, so sigma_min and every sampling test are
+  # unaffected, but the eigenvector becomes the left one.
   # Avoid materializing z*I, which creates an extra dense allocation.
   T1 = -T.copy()
   T1.flat[::T1.shape[0] + 1] += z
@@ -100,9 +91,7 @@ def _compute_sig_for_z_from_factors(
   return 1 / np.sqrt(sig_min)
 
 
-#: Tolerance for `sigmin_with_mode`. Tighter than the sampler's 1e-6 because an
-#: eigenvector converges more slowly than the eigenvalue it belongs to, and here
-#: the vector is the answer rather than a by-product.
+#: Tighter than the sampler's 1e-6: eigenvectors converge more slowly.
 DEFAULT_MODE_TOL = 1e-8
 
 
@@ -113,9 +102,7 @@ def sigmin_with_mode(
 ) -> tuple[float, NDArray[np.complex128]]:
   """`sigma_min(zI - T)` and its unit right singular vector, in the Schur basis.
 
-  The same inverse iteration the sampler runs, keeping the eigenvector it
-  discards. To reach the physical basis the result must be multiplied by the
-  Schur vectors Z -- see `nonmodal.pseudomode`.
+  The sampler's iteration, keeping the eigenvector it discards. See `pseudomode`.
   """
   funcs = scipy.linalg.get_lapack_funcs(('trtrs',), (T,))
   trtrs = cast(Callable[..., Any], funcs[0] if isinstance(funcs, list) else funcs)
@@ -193,12 +180,7 @@ def compute_pseudospectrum(
 ) -> tuple[NDArray[np.float64], NDArray[np.float64], NDArray[np.float64]]:
   """Sample a uniform `nx` by `ny` grid over `bounds`, returned as meshes.
 
-  A convenience over `sample_sigmin` for the rectangular case, giving
-  `(R, C, sigmin)` ready for contouring. The pipeline itself does not use this:
-  it samples flat and refines. This is for library callers who genuinely want a
-  fixed lattice, and for tests that compare against a reference on one.
-
-  `imat` must already be in Schur (upper-triangular) form.
+  For callers wanting a fixed lattice; `imat` must already be triangular.
   """
   points = uniform_points(bounds, nx, ny)
   print(

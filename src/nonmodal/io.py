@@ -1,9 +1,13 @@
 """Run metadata and array output.
 
-Sample sets are stored flat: `pseudo_z.npy` (complex points) alongside
-`pseudo_sigmin.npy` (values). `pseudo_eigvals.npy` travels with them so that
-`nonmodal plot` can draw the eigenvalue overlay without reloading the operator
-or touching the caches.
+Sample sets are stored flat: `pseudo_z.npy` beside `pseudo_sigmin.npy`, with
+`pseudo_eigvals.npy` alongside so `nonmodal plot` can draw its overlay without
+reloading the operator.
+
+* `save_samples` / `load_samples` -- the flat point set and its values.
+* `build_metadata` -- describe one run, for reproducibility.
+* `write_metadata` / `read_metadata` -- the run sidecar.
+* `write_pseudomodes` / `read_pseudomodes` -- the pseudomode sidecar.
 """
 
 import json

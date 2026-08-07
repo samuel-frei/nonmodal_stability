@@ -1,15 +1,15 @@
 """Command-line interface.
 
-Two subcommands, because computing and looking at the result have different
-requirements: `run` needs the HDF5 matrices and a machine with cores, `plot`
-needs only a finished output directory.
+Three subcommands, because their requirements differ: `run` needs the HDF5
+matrices and a machine with cores, `pseudomode` needs the operator but not the
+cores, `plot` needs only a finished output directory. This is the only module
+that touches `argparse.Namespace`. Flags that cannot take effect are rejected
+rather than ignored, since a two-day job silently missing a flag is worse.
 
-This is the only module that touches `argparse.Namespace`; everything below it
-receives a resolved `RunConfig` or `PlotConfig`.
-
-Flags that cannot take effect are rejected rather than ignored. Silently
-accepting `--refine-rounds` alongside `--grid-npy`, say, would let a two-day job
-run without the behaviour it was asked for.
+* `build_parser` / `parse_args` -- the argparse surface.
+* `run_config_from_args` / `pseudomode_config_from_args` /
+  `plot_config_from_args` -- resolve a `Namespace` into a frozen config.
+* `main` -- console entry point; dispatches to `pipeline`.
 """
 
 import argparse
@@ -188,13 +188,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def _point_source(args: argparse.Namespace) -> PointSource:
-  """Choose where to sample from.
-
-  The region always comes from the spectrum -- there is no way to hand-pick a
-  rectangle, because this tool is meant to start coarse and refine onto
-  features rather than sweep a chosen box at high resolution. `--grid-npy`
-  remains the escape hatch for a point set built elsewhere.
-  """
+  """Choose where to sample from: always the spectrum, or a supplied point set."""
+  # There is no hand-picked rectangle: this tool refines onto features rather
+  # than sweeping a chosen box. --grid-npy is the escape hatch for a foreign set.
   if args.grid_npy:
     # A supplied point set fixes both the region and the resolution, so the
     # lattice and padding flags cannot take effect.

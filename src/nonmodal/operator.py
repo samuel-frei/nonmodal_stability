@@ -1,9 +1,13 @@
 """Build the reduced time-advance operator and its spectral factorisations.
 
-Each stage caches its result to a `.npy` file and silently reuses it when
-present. The caches are keyed by filename only, so they are **not** invalidated
-when the input matrices, `DEFAULT_TIMESTEP` or `KEPT_BLOCK_IDS` change; delete
-them by hand after any such change.
+Each stage caches to `.npy` and reuses it blindly. Caches are keyed by filename
+only, so they are NOT invalidated when inputs, the timestep or `KEPT_BLOCK_IDS`
+change -- delete them by hand.
+
+* `load_or_compute_jacobian` -- the reduced effective operator `A`.
+* `load_or_compute_eigvals` -- full spectrum, plus eigenvectors as restarts.
+* `load_or_compute_schur` -- the triangular factor `T` of `A = Z T Z*`.
+* `load_or_compute_schur_vectors` -- both `T` and the unitary `Z`.
 """
 
 import os
@@ -23,9 +27,7 @@ REAL_JACOBIAN_CACHE = 'real_jacobian.npy'
 EIGVAL_CACHE = 'full_reduced_eigvals.npy'
 EIGVEC_CACHE = 'full_reduced_eigvecs.npy'
 SCHUR_CACHE = 'full_reduced_schur.npy'
-#: The unitary Z of A = Z T Z*. Sampling never needs it -- sigma_min is
-#: invariant under the change of basis -- but singular *vectors* are not, so a
-#: pseudomode computed on T can only be returned to the physical basis with it.
+#: The unitary Z of A = Z T Z*, needed to map a pseudomode back to the basis.
 SCHURVEC_CACHE = 'full_reduced_schurvecs.npy'
 SPECTRUM_PLOT = 'full_reduced_spectrum.png'
 SCHUR_PLOT = 'full_reduced_schur_eigs.png'
@@ -34,12 +36,9 @@ DEFAULT_CACHE_DIR = '.'
 
 
 def _load_cached(cache_dir: str, filename: str, label: str) -> NDArray[Any] | None:
-  """Return a cached array, or None if it is absent or unreadable.
-
-  Caches are keyed by filename alone, so a hit logs the absolute path and mtime:
-  that is the cheapest guard against silently computing with a stale operator
-  after the inputs, DEFAULT_TIMESTEP or KEPT_BLOCK_IDS have changed.
-  """
+  """Return a cached array, or None if it is absent or unreadable."""
+  # A hit logs path and mtime: the cheapest guard against silently computing
+  # with a stale operator, since the key is the filename alone.
   path = os.path.abspath(os.path.join(cache_dir, filename))
   try:
     array = np.load(path)
@@ -165,12 +164,9 @@ def load_or_compute_schur(
   real_jac: NDArray[np.float64],
   cache_dir: str = DEFAULT_CACHE_DIR,
 ) -> NDArray[np.complex128]:
-  """Load the cached Schur factor T, or compute and persist it.
-
-  Sampling works entirely in T, so the vectors are not loaded here even when
-  cached -- they are the same size as T and would double the resident set for
-  nothing. Use `load_or_compute_schur_vectors` when the basis matters.
-  """
+  """Load the cached Schur factor T, or compute and persist it."""
+  # Vectors are not loaded even when cached: same size as T, and sampling never
+  # needs them. Use load_or_compute_schur_vectors when the basis matters.
   cached = _load_cached(cache_dir, SCHUR_CACHE, 'Schur factor')
   if cached is not None:
     return np.asarray(cached, dtype=np.complex128)
@@ -182,12 +178,9 @@ def load_or_compute_schur_vectors(
   real_jac: NDArray[np.float64],
   cache_dir: str = DEFAULT_CACHE_DIR,
 ) -> tuple[NDArray[np.complex128], NDArray[np.complex128]]:
-  """Load or compute both halves of A = Z T Z*.
-
-  Z cannot be recovered from a cached T, so a run whose Schur factor predates
-  the vector cache has to redo the factorisation. That is reported rather than
-  done quietly, because it is an O(n^3) surprise on a cache hit.
-  """
+  """Load or compute both halves of A = Z T Z*."""
+  # Z cannot be recovered from a cached T, so a run predating the vector cache
+  # redoes the O(n^3) factorisation -- reported rather than done quietly.
   cached_t = _load_cached(cache_dir, SCHUR_CACHE, 'Schur factor')
   cached_z = _load_cached(cache_dir, SCHURVEC_CACHE, 'Schur vectors')
   if cached_t is not None and cached_z is not None:

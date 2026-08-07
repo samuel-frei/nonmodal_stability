@@ -1,19 +1,19 @@
 """Nonmodal (pseudospectral) stability analysis of reduced linear MHD operators.
 
-Loads exported Jacobian and mass matrices, reduces the global system to a
-subset of physical fields, builds the Schur form of the resulting time-advance
-operator, and samples the resolvent norm over the complex plane.
+Loads exported Jacobian and mass matrices, reduces the system to a subset of
+physical fields, builds the Schur form of the time-advance operator, and samples
+the resolvent norm over the complex plane.
 
-IMPORTANT: the BLAS thread limits below must be set before NumPy (or anything
-importing it) is first imported, otherwise they have no effect. Sampling runs a
-`fork` process pool, and unpinned BLAS threads would oversubscribe every core
-against it -- which degrades many-core runs silently rather than erroring. Keep
-these three assignments at the very top of this module, above every import.
+Module map: `matrices` and `fields` read the exports, `operator` builds and
+caches the reduced operator, `sampling` and `refine` decide where to evaluate,
+`pseudospectrum` evaluates, `pseudomode` extracts a single mode, `plotting`
+renders, and `config`/`cli`/`pipeline` tie them together.
 
-`setdefault` rather than plain assignment: pinning to one thread is the right
-default for the parallel sampling path, but a caller who deliberately sets a
-thread count before importing (a notebook doing dense linear algebra, say) has
-made an explicit choice we should not silently override.
+IMPORTANT: the BLAS thread limits below must be set before NumPy is first
+imported or they have no effect, and must stay above every import here. Sampling
+runs a `fork` pool that unpinned BLAS threads would oversubscribe -- degrading
+many-core runs silently rather than erroring. `setdefault`, not assignment, so a
+caller who sets threads before importing keeps their choice.
 """
 
 import os

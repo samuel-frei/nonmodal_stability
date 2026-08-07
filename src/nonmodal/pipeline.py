@@ -1,4 +1,9 @@
-"""End-to-end workflows: sample an operator, and render a finished run."""
+"""End-to-end workflows, one per subcommand.
+
+* `run_pipeline` -- reduce, factorise, sample, write out a pseudospectrum.
+* `pseudomode_run` -- extract modes at given points, write them as restarts.
+* `plot_run` -- render a finished run directory, without the operator.
+"""
 
 import os
 
@@ -40,8 +45,7 @@ def _sample(
 ) -> tuple[NDArray[np.complex128], NDArray[np.float64]]:
   """Evaluate the coarse initial grid, then refine onto features if asked.
 
-  Kept separate from `run_pipeline` so the Schur factor -- the largest array in
-  the run -- can be released as soon as sampling is done.
+  Separate so the Schur factor is released as soon as sampling finishes.
   """
   points = source.build()
   if half_plane:

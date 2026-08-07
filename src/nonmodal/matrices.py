@@ -1,4 +1,8 @@
-"""Sparse matrices loaded from HDF5 exports, and global assembly."""
+"""Sparse matrices loaded from HDF5 exports, and global assembly.
+
+* `HDF5Matrix` -- one matrix read from an HDF5 dataset group.
+* `assemble_global` -- scatter a local matrix into a dense global one.
+"""
 
 from typing import Any
 
@@ -10,13 +14,10 @@ from scipy import sparse
 
 
 class HDF5Matrix:
-  """A sparse matrix stored as an HDF5 dataset group.
-
-  The `lc`, `lg` and `kr` index arrays are written one-based by the Fortran
-  writer and are converted to zero-based on load.
-  """
+  """A sparse matrix stored as an HDF5 dataset group."""
 
   def __init__(self, filename: str, mat_name: str) -> None:
+    # lc, lg and kr are written one-based by the Fortran writer.
     with h5py.File(filename, 'r') as f:
       self.mat_name: str = mat_name
       self.nr: int = f[f'{mat_name}/nr'][0]
@@ -45,10 +46,9 @@ def assemble_global(
   ncg: int,
   lg: NDArray[np.int64],
 ) -> NDArray[np.float64]:
-  """Scatter a local matrix into a dense global matrix using the `lg` mapping.
-
-  Both loop bounds come from `inmat.shape[0]`, so `inmat` must be square.
-  """
+  """Scatter a local matrix into a dense global matrix using the `lg` mapping."""
+  # Both loop bounds come from inmat.shape[0], so a rectangular input would be
+  # mis-assembled rather than rejected.
   if inmat.shape[0] != inmat.shape[1]:
     raise ValueError('assemble_global requires a square local matrix')
   outmat = np.zeros((nrg, ncg))

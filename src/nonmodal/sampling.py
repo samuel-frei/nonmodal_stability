@@ -1,13 +1,16 @@
 """Where to sample the complex plane.
 
-Sample sets are flat arrays of complex points -- never meshes. Structure is
-reintroduced only at plotting time, by triangulating or interpolating. That
-keeps one representation through the whole pipeline instead of two.
+Sample sets are flat arrays of complex points, never meshes; structure returns
+only at plotting time. The initial grid is coarse and always derived from the
+spectrum, since this tool refines onto features rather than sweeping a chosen
+box, so resolution is asked for as `nx` by `ny` and not as a point total.
 
-The initial grid is deliberately coarse and always derived from the spectrum:
-this tool is for starting at low resolution and refining onto features, not for
-sampling a hand-picked rectangle at high resolution. Resolution is therefore
-asked for as explicit `nx` by `ny` dimensions rather than a point total.
+* `Bounds` -- an axis-aligned box, with constructors from a spectrum or points.
+* `uniform_points` -- a flat lattice covering a box, including its edges.
+* `mirror_conjugates` -- reflect samples across the real axis.
+* `load_flat_grid_npy` -- read a flat complex point set from `.npy`.
+* `RectangularSource` / `FileSource` / `SpectrumSource` -- point sources; each
+  has `resolve(eigvals)`, so the pipeline never branches on which it got.
 """
 
 from dataclasses import dataclass
@@ -62,18 +65,9 @@ class Bounds:
 
 
 def _axis_through_zero(lo: float, hi: float, n: int) -> NDArray[np.float64]:
-  """`n` points spanning [lo, hi], with an exact 0.0 when the span straddles it.
-
-  Two things go wrong with a plain `linspace` here. An even `n` steps over zero
-  entirely, and an odd `n` can land on something like 8.9e-16 instead of 0.0
-  through ordinary rounding. Both matter downstream: the half-plane filter tests
-  `imag >= 0` and `mirror_conjugates` tests `imag != 0`, so a near-zero row gets
-  duplicated into a pair of points ~1e-15 apart, which is a degenerate
-  triangulation waiting to happen.
-
-  Building each side separately and splicing an exact zero between them avoids
-  both. `n` is honoured exactly; only the spacing shifts, and only when needed.
-  """
+  """`n` points spanning [lo, hi], with an exact 0.0 when the span straddles it."""
+  # A plain linspace steps over zero for even n and can land on ~9e-16 for odd n;
+  # both break the exact comparisons downstream. See the CLAUDE.md landmine.
   if lo >= 0.0 or hi <= 0.0:
     return np.linspace(lo, hi, n)
   if n == 1:
@@ -94,9 +88,7 @@ def _axis_through_zero(lo: float, hi: float, n: int) -> NDArray[np.float64]:
 def uniform_points(bounds: Bounds, nx: int, ny: int) -> NDArray[np.complex128]:
   """A flat uniform lattice covering `bounds`, including its edges.
 
-  When the region straddles the real axis, `Im z = 0` is always one of the
-  sampled rows: a real operator's pseudospectrum is symmetric about it and its
-  contours pinch there, so it is the last line you want to step over.
+  `Im z = 0` is always a row when the region straddles it; contours pinch there.
   """
   if nx < 1 or ny < 1:
     raise ValueError('nx and ny must be >= 1')
@@ -109,11 +101,9 @@ def uniform_points(bounds: Bounds, nx: int, ny: int) -> NDArray[np.complex128]:
 def mirror_conjugates(
   z: NDArray[np.complex128], sigmin: NDArray[np.float64]
 ) -> tuple[NDArray[np.complex128], NDArray[np.float64]]:
-  """Reflect samples across the real axis.
+  """Reflect samples across the real axis, without duplicating the axis itself.
 
-  Valid only when the operator's spectrum is closed under conjugation, i.e.
-  when the operator is real: then sigma_min(conj(z)I - A) = sigma_min(zI - A).
-  Points already on the real axis are not duplicated.
+  Valid only for a real operator, whose spectrum is closed under conjugation.
   """
   off_axis = z.imag != 0.0
   return (
@@ -134,9 +124,7 @@ def load_flat_grid_npy(path: str) -> NDArray[np.complex128]:
 
 DEFAULT_BOUNDS_PAD = 0.3
 DEFAULT_GRID_NX = 25
-#: Odd, so that on a region straddling the real axis the zero row is a lattice
-#: point and the spacing stays exactly even. An even count still puts a sample
-#: on the axis -- see `_axis_through_zero` -- but at ~9% spacing spread.
+#: Odd, so the zero row is a lattice point and the spacing stays even.
 DEFAULT_GRID_NY = 25
 
 
@@ -144,8 +132,7 @@ DEFAULT_GRID_NY = 25
 class RectangularSource:
   """Sample a uniform lattice of `nx` by `ny` points over a box.
 
-  Dimensions are always explicit: a point total would have to be factored back
-  into a shape, and the answer would depend on the arithmetic of the number.
+  Dimensions are explicit; a total would have to be factored back into a shape.
   """
 
   bounds: Bounds
@@ -192,9 +179,7 @@ class FileSource:
 class SpectrumSource:
   """Sample a box inferred from the operator's own spectrum.
 
-  Used when no bounds are given. It cannot build points on its own -- the
-  spectrum is not known until the operator has been factorised -- so it becomes
-  a `RectangularSource` via `resolve` once eigenvalues are in hand.
+  Cannot build points alone; `resolve` turns it into a `RectangularSource`.
   """
 
   nx: int
@@ -227,6 +212,5 @@ class SpectrumSource:
 
 #: A source that can already produce points.
 ResolvedSource = RectangularSource | FileSource
-#: What a run may be configured with. `resolve` turns any of these into a
-#: ResolvedSource, so the pipeline never branches on which one it got.
+#: What a run may be configured with; `resolve` maps any of these to the above.
 PointSource = RectangularSource | FileSource | SpectrumSource
