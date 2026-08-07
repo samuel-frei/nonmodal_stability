@@ -75,8 +75,40 @@ uv run nonmodal run --grid-nx 25 --grid-ny 25 --refine-points 2600 --nprocs 32
 uv run nonmodal plot --output-dir pseudospectrum --min-level 1e-7 --nlevels 16
 ```
 
+A third subcommand extracts the mode behind a point you name:
+
+```bash
+uv run nonmodal pseudomode --at 5e5-2.4e4j
+uv run nonmodal pseudomode --at 5e5-2.4e4j --at -1e6+3e5j --phases 8
+```
+
 `python -m nonmodal` works identically. See `cases/harris_linear_20x6z/ps1.sbatch`
 for a portable SLURM template.
+
+### Pseudomodes
+
+The pseudomode at `z` is the right singular vector of `zI - A` belonging to
+`sigma_min`, so it satisfies `||(A - z I) v|| = sigma_min`: an approximate eigenvector
+with a known residual. Where the operator is strongly non-normal, `sigma_min` is tiny
+far from any eigenvalue, and `v` is a direction the operator very nearly leaves
+invariant even though `z` is nowhere near the spectrum.
+
+Extraction runs the same inverse iteration the sampler runs, at the point you name.
+`sigma_min` and its eigenvector come out of one solve, and that eigenvector *is* the
+pseudomode — sampling computes it at every point and discards it. Keeping it costs
+nothing beyond the value, but the solve is still done: sampled vectors are not stored, so
+a mode is a fresh iteration even at a point the run already visited. Multiplying by the
+Schur vectors then returns it to the physical basis.
+
+Modes are written to `<output-dir>/pseudomodes/` as `.rst` restart files, the same format
+as the eigenvectors, for viewing in OFT. `--phases N` sweeps the mode's phase across `N`
+files; since each file records its index as `t`, the directory reads back as a time
+series and a travelling mode animates. The default `--phases 1` writes the single phase
+carrying the most amplitude.
+
+`--at` takes the point directly and may be repeated; several points share one load of the
+operator. Choosing *which* point is deliberately left to you — nothing here searches the
+plane. `pseudomodes.json` records each `z`, its `sigma_min`, and the residual.
 
 You can also supply a precomputed set of complex points with
 `--grid-npy points.npy` — a flat complex array. Samples are unstructured
@@ -143,9 +175,15 @@ vector rather than ARPACK's random one.
 Four expensive intermediates are cached under `--cache-dir` (default `.`):
 
 ```
-real_jacobian.npy  full_reduced_eigvals.npy
+real_jacobian.npy       full_reduced_eigvals.npy
 full_reduced_schur.npy  full_reduced_eigvecs.npy
+full_reduced_schurvecs.npy
 ```
+
+`full_reduced_schurvecs.npy` holds the unitary `Z` of `A = Z T Z*`. Sampling never needs
+it, but pseudomodes do, and `Z` cannot be recovered from a cached `T` — so a run whose
+Schur factor predates this file has to redo the factorisation once. It says so before
+starting.
 
 **Caches are keyed by filename alone.** They are *not* invalidated when the
 input matrices, `DEFAULT_TIMESTEP`, or `KEPT_BLOCK_IDS` change. Changing any of

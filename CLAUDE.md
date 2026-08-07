@@ -93,9 +93,10 @@ no caches, which is why `run` also saves `pseudo_eigvals.npy` for the overlay.
 | `refine.py` | error-driven Delaunay refinement |
 | `pseudospectrum.py` | `sample_sigmin`, fork-pool parallelism, contour levels |
 | `plotting.py` | tricontour contours, interpolated heatmap |
+| `pseudomode.py` | pseudomode extraction at an explicitly given point |
 | `io.py` | run metadata, flat sample IO |
-| `config.py` | frozen `RunConfig` / `PlotConfig` |
-| `pipeline.py` | `run_pipeline`, `plot_run` |
+| `config.py` | frozen `RunConfig` / `PlotConfig` / `PseudomodeConfig` |
+| `pipeline.py` | `run_pipeline`, `plot_run`, `pseudomode_run` |
 | `cli.py` | argparse subcommands; the only module touching `Namespace` |
 
 `examples/pseudospectra_intro.ipynb` is the runnable front door. It imports the test
@@ -124,6 +125,20 @@ the block layout lives in `fields.py` rather than a vendor-named module.
   `--cache-dir` are reused blindly; they are *not* invalidated when inputs,
   `DEFAULT_TIMESTEP` or `KEPT_BLOCK_IDS` change. Delete them by hand. Cache hits log
   path and mtime so stale reuse is visible in the log.
+- **`Z` cannot be recovered from a cached `T`.** `full_reduced_schurvecs.npy` is written
+  by `_compute_schur` alongside `full_reduced_schur.npy`, but every run predating it has
+  only the latter. `load_or_compute_schur_vectors` therefore redoes the whole `O(n^3)`
+  factorisation on what looks like a cache hit, and says so first. `load_or_compute_schur`
+  stays vector-free on purpose: sampling works entirely in `T`, and `Z` is the same size,
+  so loading it there would double the resident set for nothing.
+- **The pseudomode is the eigenvector the sampler discards.**
+  `_shifted_resolvent_operator` is `((zI-T)*(zI-T))^-1` — the Gram-matrix formulation of
+  Wright & Trefethen (2001) §2, "solved in two stages, each using triangular system
+  solves", which is `M^-1 M^-H`. Its eigenvector is therefore the **right** singular
+  vector, i.e. the pseudomode; that follows from `M*M` and is not an artefact of how the
+  stages are ordered. Swapping them computes `(M M*)^-1`, whose eigenvalues are identical
+  — so `sigma_min` is unaffected and no sampling test would catch it — but whose
+  eigenvector is the left vector.
 - **`Im z = 0` is always a sample row** when the region straddles it
   (`_axis_through_zero`). A plain `linspace` steps over zero for even `ny`, and for
   some odd `ny` lands on ~9e-16 instead of 0.0 — which the half-plane filter

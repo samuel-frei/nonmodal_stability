@@ -5,13 +5,20 @@ import os
 import numpy as np
 from numpy.typing import NDArray
 
-from .config import PlotConfig, RunConfig
-from .fields import build_reduction_mapping
-from .io import build_metadata, load_samples, save_samples, write_metadata
+from .config import PlotConfig, PseudomodeConfig, RunConfig
+from .fields import build_reduction_mapping, write_restart_modes
+from .io import (
+  build_metadata,
+  load_samples,
+  save_samples,
+  write_metadata,
+  write_pseudomodes,
+)
 from .operator import (
   load_or_compute_eigvals,
   load_or_compute_jacobian,
   load_or_compute_schur,
+  load_or_compute_schur_vectors,
 )
 from .plotting import (
   _normalize_html_name,
@@ -19,6 +26,7 @@ from .plotting import (
   pseudo_contours,
   pseudo_heatmap,
 )
+from .pseudomode import pseudomode_at
 from .pseudospectrum import _worker_count, choose_contour_levels, sample_sigmin
 from .refine import refine
 from .sampling import Bounds, ResolvedSource, mirror_conjugates
@@ -91,6 +99,36 @@ def run_pipeline(config: RunConfig) -> None:
     n_evaluated=n_evaluated,
     half_plane=half_plane,
     effective_workers=_worker_count(n_evaluated, config.nprocs)))
+
+
+def pseudomode_run(config: PseudomodeConfig) -> list[str]:
+  """Extract pseudomodes at the given points and write them as restart files."""
+  nr_local, keep_global = build_reduction_mapping(config.jacobian)
+  os.makedirs(config.output_dir, exist_ok=True)
+
+  real_jac = load_or_compute_jacobian(
+    config.jacobian, config.massmat, keep_global, config.cache_dir, config.timestep)
+  schur_t, schur_z = load_or_compute_schur_vectors(real_jac, config.cache_dir)
+  del real_jac
+
+  modes = [pseudomode_at(schur_t, schur_z, z, config.tol) for z in config.points]
+  del schur_t, schur_z
+
+  mode_dir = os.path.join(config.output_dir, config.mode_dir)
+  paths = write_restart_modes(
+    np.column_stack([m.vector for m in modes]),
+    keep_global, nr_local, mode_dir, phases=config.phases)
+  print(f'wrote {len(paths)} restart files to {os.path.abspath(mode_dir)}', flush=True)
+
+  write_pseudomodes(config.output_dir, {
+    'run_tag': config.run_tag,
+    'case_tag': config.case_tag,
+    'phases': int(config.phases),
+    'tol': float(config.tol),
+    'modes': [m.describe() for m in modes],
+    'files': [os.path.relpath(p, config.output_dir) for p in paths],
+  })
+  return paths
 
 
 def plot_run(config: PlotConfig) -> tuple[str, str]:

@@ -2,8 +2,14 @@
 
 import pytest
 
-from nonmodal.cli import parse_args, plot_config_from_args, run_config_from_args
-from nonmodal.config import PlotConfig, RunConfig
+from nonmodal.cli import (
+  parse_args,
+  plot_config_from_args,
+  pseudomode_config_from_args,
+  run_config_from_args,
+)
+from nonmodal.config import PlotConfig, PseudomodeConfig, RunConfig
+from nonmodal.pseudospectrum import DEFAULT_MODE_TOL
 from nonmodal.sampling import (
   DEFAULT_GRID_NX,
   DEFAULT_GRID_NY,
@@ -156,3 +162,61 @@ def test_levels_conflicts_with_the_flags_it_overrides(clashing: list[str]) -> No
   args = parse_args(['plot', '--levels', '1e-6', '1e-4', *clashing])
   with pytest.raises(ValueError, match='would have no effect'):
     plot_config_from_args(args)
+
+
+def _pseudomode(*extra: str) -> PseudomodeConfig:
+  return pseudomode_config_from_args(parse_args(['pseudomode', *extra]))
+
+
+def test_pseudomode_defaults_are_fully_resolved() -> None:
+  config = _pseudomode('--at', '1+1j')
+  assert isinstance(config, PseudomodeConfig)
+  assert config.phases == 1
+  assert config.mode_dir == 'pseudomodes'
+  assert config.tol == pytest.approx(DEFAULT_MODE_TOL)
+  assert all(getattr(config, f) is not None for f in config.__dataclass_fields__)
+
+
+def test_explicit_points_are_parsed_and_repeatable() -> None:
+  config = _pseudomode('--at', '5e5-2.4e4j', '--at', '-1+2j')
+  assert config.points == (complex(5e5, -2.4e4), complex(-1, 2))
+
+
+def test_at_least_one_point_is_required() -> None:
+  with pytest.raises(SystemExit):
+    parse_args(['pseudomode'])
+
+
+def test_malformed_complex_point_is_rejected() -> None:
+  with pytest.raises(SystemExit):
+    parse_args(['pseudomode', '--at', 'not-a-number'])
+
+
+@pytest.mark.parametrize(
+  ('flags', 'message'),
+  [
+    (['--phases', '0'], 'phases must be >= 1'),
+    (['--mode-tol', '0'], 'mode-tol must be positive'),
+    (['--timestep', '-1'], 'timestep must be positive'),
+  ],
+)
+def test_pseudomode_rejects_out_of_range_values(
+  flags: list[str], message: str
+) -> None:
+  with pytest.raises(ValueError, match=message):
+    _pseudomode('--at', '1+1j', *flags)
+
+
+def test_pseudomode_output_flags_reach_the_config() -> None:
+  config = _pseudomode(
+    '--at', '1+1j', '--phases', '8', '--mode-dir', 'modes',
+    '--mode-tol', '1e-10', '--cache-dir', 'cache', '--output-dir', 'out',
+    '--jacobian', 'j.h5', '--massmat', 'm.h5', '--timestep', '2e-7',
+    '--run-tag', 'r', '--case-tag', 'c')
+  assert config.phases == 8
+  assert config.mode_dir == 'modes'
+  assert config.tol == pytest.approx(1e-10)
+  assert (config.cache_dir, config.output_dir) == ('cache', 'out')
+  assert (config.jacobian, config.massmat) == ('j.h5', 'm.h5')
+  assert config.timestep == pytest.approx(2e-7)
+  assert (config.run_tag, config.case_tag) == ('r', 'c')

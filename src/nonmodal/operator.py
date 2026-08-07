@@ -23,6 +23,10 @@ REAL_JACOBIAN_CACHE = 'real_jacobian.npy'
 EIGVAL_CACHE = 'full_reduced_eigvals.npy'
 EIGVEC_CACHE = 'full_reduced_eigvecs.npy'
 SCHUR_CACHE = 'full_reduced_schur.npy'
+#: The unitary Z of A = Z T Z*. Sampling never needs it -- sigma_min is
+#: invariant under the change of basis -- but singular *vectors* are not, so a
+#: pseudomode computed on T can only be returned to the physical basis with it.
+SCHURVEC_CACHE = 'full_reduced_schurvecs.npy'
 SPECTRUM_PLOT = 'full_reduced_spectrum.png'
 SCHUR_PLOT = 'full_reduced_schur_eigs.png'
 DEFAULT_TIMESTEP = 1e-7
@@ -134,22 +138,65 @@ def load_or_compute_eigvals(
   return eigvals
 
 
-def load_or_compute_schur(
+def _compute_schur(
   real_jac: NDArray[np.float64],
-  cache_dir: str = DEFAULT_CACHE_DIR,
-) -> NDArray[np.complex128]:
-  """Load the cached Schur factorisation, or compute and persist it."""
-  cached = _load_cached(cache_dir, SCHUR_CACHE, 'Schur factor')
-  if cached is not None:
-    return np.asarray(cached, dtype=np.complex128)
-
+  cache_dir: str,
+) -> tuple[NDArray[np.complex128], NDArray[np.complex128]]:
+  """Factorise A = Z T Z*, caching both halves and plotting the diagonal."""
   print('computing schur factorization', flush=True)
-  schur_raw, _ = scipy.linalg.schur(real_jac, output='complex')
+  schur_raw, vectors_raw = scipy.linalg.schur(real_jac, output='complex')
   schur_t = np.asarray(schur_raw, dtype=np.complex128)
+  schur_z = np.asarray(vectors_raw, dtype=np.complex128)
+
   os.makedirs(cache_dir, exist_ok=True)
   plt.figure()
   plt.scatter(schur_t.diagonal().real, schur_t.diagonal().imag, s=2, c='k')
   plt.savefig(os.path.join(cache_dir, SCHUR_PLOT))
   plt.close()
+
   _save_cached(cache_dir, SCHUR_CACHE, schur_t)
+  # Saved unconditionally: it is already computed, and recovering it later
+  # means redoing the whole factorisation.
+  _save_cached(cache_dir, SCHURVEC_CACHE, schur_z)
+  return schur_t, schur_z
+
+
+def load_or_compute_schur(
+  real_jac: NDArray[np.float64],
+  cache_dir: str = DEFAULT_CACHE_DIR,
+) -> NDArray[np.complex128]:
+  """Load the cached Schur factor T, or compute and persist it.
+
+  Sampling works entirely in T, so the vectors are not loaded here even when
+  cached -- they are the same size as T and would double the resident set for
+  nothing. Use `load_or_compute_schur_vectors` when the basis matters.
+  """
+  cached = _load_cached(cache_dir, SCHUR_CACHE, 'Schur factor')
+  if cached is not None:
+    return np.asarray(cached, dtype=np.complex128)
+  schur_t, _ = _compute_schur(real_jac, cache_dir)
   return schur_t
+
+
+def load_or_compute_schur_vectors(
+  real_jac: NDArray[np.float64],
+  cache_dir: str = DEFAULT_CACHE_DIR,
+) -> tuple[NDArray[np.complex128], NDArray[np.complex128]]:
+  """Load or compute both halves of A = Z T Z*.
+
+  Z cannot be recovered from a cached T, so a run whose Schur factor predates
+  the vector cache has to redo the factorisation. That is reported rather than
+  done quietly, because it is an O(n^3) surprise on a cache hit.
+  """
+  cached_t = _load_cached(cache_dir, SCHUR_CACHE, 'Schur factor')
+  cached_z = _load_cached(cache_dir, SCHURVEC_CACHE, 'Schur vectors')
+  if cached_t is not None and cached_z is not None:
+    return (np.asarray(cached_t, dtype=np.complex128),
+            np.asarray(cached_z, dtype=np.complex128))
+
+  if cached_t is not None:
+    print(
+      f'{SCHUR_CACHE} is cached but {SCHURVEC_CACHE} is not; Z cannot be '
+      f'recovered from T alone, so the factorisation is being redone. It will '
+      f'be cached afterwards.', flush=True)
+  return _compute_schur(real_jac, cache_dir)
