@@ -22,6 +22,7 @@ POINTS_FILE = 'pseudo_z.npy'
 SIGMIN_FILE = 'pseudo_sigmin.npy'
 EIGVALS_FILE = 'pseudo_eigvals.npy'
 METADATA_FILE = 'run_metadata.json'
+PSEUDOMODE_FILE = 'pseudomodes.json'
 
 
 def build_metadata(
@@ -58,19 +59,41 @@ def build_metadata(
   }
 
 
+def _write_json(
+  output_dir: str, filename: str, payload: dict[str, Any], label: str
+) -> str:
+  """Write one JSON sidecar, creating the directory if needed."""
+  os.makedirs(output_dir, exist_ok=True)
+  path = os.path.join(output_dir, filename)
+  with open(path, 'w', encoding='ascii') as f:
+    json.dump(payload, f, indent=2, sort_keys=True)
+  print(f'wrote {label}: {path}', flush=True)
+  return path
+
+
+def _read_json(output_dir: str, filename: str) -> dict[str, Any]:
+  with open(os.path.join(output_dir, filename), encoding='ascii') as f:
+    return dict(json.load(f))
+
+
 def write_metadata(output_dir: str, metadata: dict[str, Any]) -> None:
   """Persist run metadata as JSON."""
-  os.makedirs(output_dir, exist_ok=True)
-  path = os.path.join(output_dir, METADATA_FILE)
-  with open(path, 'w', encoding='ascii') as f:
-    json.dump(metadata, f, indent=2, sort_keys=True)
-  print(f'wrote metadata: {path}', flush=True)
+  _write_json(output_dir, METADATA_FILE, metadata, 'metadata')
 
 
 def read_metadata(output_dir: str) -> dict[str, Any]:
   """Read back the metadata written by a run."""
-  with open(os.path.join(output_dir, METADATA_FILE), encoding='ascii') as f:
-    return dict(json.load(f))
+  return _read_json(output_dir, METADATA_FILE)
+
+
+def write_pseudomodes(output_dir: str, payload: dict[str, Any]) -> None:
+  """Persist pseudomode provenance: where each mode came from and its residual."""
+  _write_json(output_dir, PSEUDOMODE_FILE, payload, 'pseudomode metadata')
+
+
+def read_pseudomodes(output_dir: str) -> dict[str, Any]:
+  """Read back the pseudomode sidecar."""
+  return _read_json(output_dir, PSEUDOMODE_FILE)
 
 
 def save_samples(

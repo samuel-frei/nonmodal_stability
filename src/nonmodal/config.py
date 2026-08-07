@@ -8,6 +8,7 @@ so an invalid run fails before any matrix is loaded.
 from dataclasses import dataclass, field
 
 from .operator import DEFAULT_TIMESTEP
+from .pseudospectrum import DEFAULT_MODE_TOL
 from .sampling import PointSource
 
 DEFAULT_N_EIGVECS = 40
@@ -15,6 +16,7 @@ DEFAULT_REFINE_ROUNDS = 4
 DEFAULT_NLEVELS = 16
 DEFAULT_MIN_LEVEL = 1e-7
 DEFAULT_PLOT_MESH = 400
+DEFAULT_MODE_DIR = 'pseudomodes'
 
 
 @dataclass(frozen=True)
@@ -55,6 +57,45 @@ class RunConfig:
       raise ValueError('timestep must be positive')
     if self.n_eigvecs < 1:
       raise ValueError('n-eigvecs must be >= 1')
+
+
+@dataclass(frozen=True)
+class PseudomodeConfig:
+  """Everything `nonmodal pseudomode` needs.
+
+  Needs the Schur factor *and* its vectors, so unlike `plot` it is a compute
+  command; but it takes the point `z` as given rather than searching for one.
+  """
+
+  #: Explicit points to extract modes at. Mutually exclusive with `from_samples`.
+  points: tuple[complex, ...] = ()
+  #: A rule from `pseudomode.SAMPLE_RULES`, applied to a finished run's samples.
+  from_samples: str = ''
+  jacobian: str = './lin_ops.h5'
+  massmat: str = './mass_mat.h5'
+  cache_dir: str = '.'
+  output_dir: str = 'pseudospectrum'
+  #: Subdirectory of `output_dir` for the restart files, kept apart from
+  #: `eigvecs_plot/` so the two cannot overwrite one another.
+  mode_dir: str = DEFAULT_MODE_DIR
+  #: Restart files written per mode. 1 uses the amplitude-maximising phase;
+  #: more sweep the phase, which reads back as an animation.
+  phases: int = 1
+  tol: float = DEFAULT_MODE_TOL
+  timestep: float = DEFAULT_TIMESTEP
+  run_tag: str = ''
+  case_tag: str = ''
+
+  def __post_init__(self) -> None:
+    if bool(self.points) == bool(self.from_samples):
+      raise ValueError(
+        'give either --at or --from-samples, not both and not neither')
+    if self.phases < 1:
+      raise ValueError('phases must be >= 1')
+    if self.tol <= 0.0:
+      raise ValueError('mode-tol must be positive')
+    if self.timestep <= 0.0:
+      raise ValueError('timestep must be positive')
 
 
 @dataclass(frozen=True)

@@ -16,14 +16,18 @@ import argparse
 
 from .config import (
   DEFAULT_MIN_LEVEL,
+  DEFAULT_MODE_DIR,
   DEFAULT_N_EIGVECS,
   DEFAULT_NLEVELS,
   DEFAULT_REFINE_ROUNDS,
   PlotConfig,
+  PseudomodeConfig,
   RunConfig,
 )
 from .operator import DEFAULT_TIMESTEP
-from .pipeline import plot_run, run_pipeline
+from .pipeline import plot_run, pseudomode_run, run_pipeline
+from .pseudomode import SAMPLE_RULES
+from .pseudospectrum import DEFAULT_MODE_TOL
 from .sampling import (
   DEFAULT_BOUNDS_PAD,
   DEFAULT_GRID_NX,
@@ -96,6 +100,66 @@ def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
                    help='Case identifier for metadata tracking.')
 
 
+def _complex_arg(text: str) -> complex:
+  """Parse a complex literal such as `5e5-2.4e4j`."""
+  try:
+    return complex(text.replace(' ', ''))
+  except ValueError:
+    raise argparse.ArgumentTypeError(
+      f'{text!r} is not a complex number; write it like 5e5-2.4e4j') from None
+
+
+def _add_pseudomode_arguments(parser: argparse.ArgumentParser) -> None:
+  where = parser.add_argument_group('where to extract')
+  where.add_argument('--at', type=_complex_arg, action='append', default=None,
+                     metavar='Z', dest='at',
+                     help='Complex point to extract a mode at, e.g. 5e5-2.4e4j. '
+                          'Repeat for several. Mutually exclusive with '
+                          '--from-samples.')
+  where.add_argument('--from-samples', type=str, default=None,
+                     choices=list(SAMPLE_RULES),
+                     help='Choose the point from a finished run in --output-dir. '
+                          '"kreiss" maximises Re z / sigma_min over the right '
+                          'half-plane, which is the point contributing most to '
+                          'the transient-growth bound; "rightmost" and '
+                          '"min-sigmin" are literal. A chosen point lying on the '
+                          'edge of the sampled region is reported as such.')
+
+  out = parser.add_argument_group('output')
+  out.add_argument('--phases', type=int, default=1,
+                   help='Restart files per mode (default 1). One uses the phase '
+                        'carrying the most amplitude; more sweep the phase, so '
+                        'the directory reads back as an animation.')
+  out.add_argument('--mode-dir', type=str, default=DEFAULT_MODE_DIR,
+                   help=f'Subdirectory of --output-dir for the restart files '
+                        f'(default {DEFAULT_MODE_DIR}).')
+  out.add_argument('--mode-tol', type=float, default=None,
+                   help=f'ARPACK tolerance for the mode (default '
+                        f'{DEFAULT_MODE_TOL:g}). Tighter than sampling uses, '
+                        f'because the vector converges more slowly than the '
+                        f'value.')
+
+  op = parser.add_argument_group('operator')
+  op.add_argument('--jacobian', type=str, default='./lin_ops.h5',
+                  help='HDF5 file holding the /jacobian matrix. Needed for the '
+                       'field-block reduction mapping even on a cache hit.')
+  op.add_argument('--massmat', type=str, default='./mass_mat.h5',
+                  help='HDF5 file holding the /massmat matrix.')
+  op.add_argument('--timestep', type=float, default=None,
+                  help='Timestep of the implicit solve that produced the Jacobian.')
+  op.add_argument('--cache-dir', type=str, default='.',
+                  help='Directory holding the operator and Schur caches. A run '
+                       'whose Schur factor predates the vector cache has to redo '
+                       'the factorisation, since Z cannot be recovered from T.')
+  op.add_argument('--output-dir', type=str, default='pseudospectrum',
+                  help='Run directory: read for --from-samples, written to for '
+                       'the modes and their metadata.')
+  op.add_argument('--run-tag', type=str, default='',
+                  help='Batch-level run identifier for metadata tracking.')
+  op.add_argument('--case-tag', type=str, default='',
+                  help='Case identifier for metadata tracking.')
+
+
 def _add_plot_arguments(parser: argparse.ArgumentParser) -> None:
   parser.add_argument('--output-dir', type=str, default='pseudospectrum',
                       help='Directory holding a finished run to render.')
@@ -124,6 +188,8 @@ def build_parser() -> argparse.ArgumentParser:
   sub = parser.add_subparsers(dest='command', required=True)
   _add_run_arguments(sub.add_parser('run', help='Sample a pseudospectrum.'))
   _add_plot_arguments(sub.add_parser('plot', help='Render a finished run.'))
+  _add_pseudomode_arguments(sub.add_parser(
+    'pseudomode', help='Extract pseudomodes as restart files.'))
   return parser
 
 
@@ -211,10 +277,33 @@ def plot_config_from_args(args: argparse.Namespace) -> PlotConfig:
     levels=tuple(args.levels) if args.levels else ())
 
 
+def pseudomode_config_from_args(args: argparse.Namespace) -> PseudomodeConfig:
+  """Resolve parsed arguments into a `PseudomodeConfig`."""
+  if args.at and args.from_samples:
+    raise ValueError(
+      '--at names the points directly, so --from-samples would have no effect')
+
+  return PseudomodeConfig(
+    points=tuple(args.at) if args.at else (),
+    from_samples=args.from_samples or '',
+    jacobian=args.jacobian,
+    massmat=args.massmat,
+    cache_dir=args.cache_dir,
+    output_dir=args.output_dir,
+    mode_dir=args.mode_dir,
+    phases=args.phases,
+    tol=DEFAULT_MODE_TOL if args.mode_tol is None else args.mode_tol,
+    timestep=DEFAULT_TIMESTEP if args.timestep is None else args.timestep,
+    run_tag=args.run_tag,
+    case_tag=args.case_tag)
+
+
 def main(argv: list[str] | None = None) -> None:
   """CLI entry point."""
   args = parse_args(argv)
   if args.command == 'plot':
     plot_run(plot_config_from_args(args))
+  elif args.command == 'pseudomode':
+    pseudomode_run(pseudomode_config_from_args(args))
   else:
     run_pipeline(run_config_from_args(args))

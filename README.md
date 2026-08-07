@@ -75,8 +75,45 @@ uv run nonmodal run --grid-nx 25 --grid-ny 25 --refine-points 2600 --nprocs 32
 uv run nonmodal plot --output-dir pseudospectrum --min-level 1e-7 --nlevels 16
 ```
 
+A third subcommand extracts the mode behind a point in the plane:
+
+```bash
+# The mode contributing most to the transient-growth bound:
+uv run nonmodal pseudomode --from-samples kreiss --phases 8
+
+# Or a point you name yourself:
+uv run nonmodal pseudomode --at 5e5-2.4e4j
+```
+
 `python -m nonmodal` works identically. See `cases/harris_linear_20x6z/ps1.sbatch`
 for a portable SLURM template.
+
+### Pseudomodes
+
+The pseudomode at `z` is the right singular vector of `zI - A` belonging to
+`sigma_min`, so it satisfies `||(A - z I) v|| = sigma_min`: an approximate eigenvector
+with a known residual. Where the operator is strongly non-normal, `sigma_min` is tiny
+far from any eigenvalue, and `v` is a direction the operator very nearly leaves
+invariant even though `z` is nowhere near the spectrum.
+
+Nothing is re-solved to get it. Sampling already runs the inverse iteration whose
+eigenvector *is* the pseudomode and throws it away; this keeps it, and multiplies by the
+Schur vectors to return it to the physical basis.
+
+Modes are written to `<output-dir>/pseudomodes/` as `.rst` restart files, the same format
+as the eigenvectors, for viewing in OFT. `--phases N` sweeps the mode's phase across `N`
+files; since each file records its index as `t`, the directory reads back as a time
+series and a travelling mode animates. The default `--phases 1` writes the single phase
+carrying the most amplitude.
+
+`--from-samples` picks the point out of a finished run: `kreiss` maximises
+`Re z / sigma_min` over the right half-plane, `rightmost` and `min-sigmin` are literal.
+
+> **Read the boundary warning.** The sampled region is derived from the spectrum, so the
+> rightmost sample is the edge of that box — set by where sampling stopped, not by the
+> operator. The run says so when the chosen point lies on an edge, and records it in
+> `pseudomodes.json`. Widen `--bounds-pad` and re-run, or treat the result as a lower
+> bound.
 
 You can also supply a precomputed set of complex points with
 `--grid-npy points.npy` — a flat complex array. Samples are unstructured
@@ -143,9 +180,15 @@ vector rather than ARPACK's random one.
 Four expensive intermediates are cached under `--cache-dir` (default `.`):
 
 ```
-real_jacobian.npy  full_reduced_eigvals.npy
+real_jacobian.npy       full_reduced_eigvals.npy
 full_reduced_schur.npy  full_reduced_eigvecs.npy
+full_reduced_schurvecs.npy
 ```
+
+`full_reduced_schurvecs.npy` holds the unitary `Z` of `A = Z T Z*`. Sampling never needs
+it, but pseudomodes do, and `Z` cannot be recovered from a cached `T` — so a run whose
+Schur factor predates this file has to redo the factorisation once. It says so before
+starting.
 
 **Caches are keyed by filename alone.** They are *not* invalidated when the
 input matrices, `DEFAULT_TIMESTEP`, or `KEPT_BLOCK_IDS` change. Changing any of
