@@ -28,8 +28,11 @@ uv sync
 
 [`examples/pseudospectra_intro.ipynb`](examples/pseudospectra_intro.ipynb) works
 one operator through end to end using matrices fetched from the NIST Matrix
-Market — sampling, contours, and the `sigma_min / dist(z, spectrum)` ratio that
-quantifies how far the resolvent exceeds what the eigenvalues alone predict.
+Market: inferring a region from the spectrum, coarse sampling then refinement,
+contours, the `sigma_min / dist(z, spectrum)` ratio that quantifies how far the
+resolvent exceeds what the eigenvalues alone predict, and the pseudomode that
+ratio is measuring. On `west0479` the pseudomode beats the best possible
+eigenvector by 1.7e6 — the same factor the ratio reports, reached independently.
 It needs no simulation output of your own.
 
 ```bash
@@ -62,9 +65,9 @@ Reduction keeps blocks `(0, 1, 3, 4, 5)` — `n, velx, velz, T, psi` — droppin
 
 ## Command-line use
 
-There are two subcommands, because computing and looking at the result have
-different requirements. `run` needs the HDF5 matrices and a machine with cores;
-`plot` needs only a finished output directory.
+There are three subcommands, because their requirements differ. `run` needs the
+HDF5 matrices and a machine with cores; `pseudomode` needs the operator but not
+the cores; `plot` needs only a finished output directory.
 
 ```bash
 # On the cluster, from a directory containing the input files.
@@ -75,9 +78,8 @@ uv run nonmodal run --grid-nx 25 --grid-ny 25 --refine-points 2600 --nprocs 32
 uv run nonmodal plot --output-dir pseudospectrum --min-level 1e-7 --nlevels 16
 ```
 
-A third subcommand extracts the mode behind a point you name:
-
 ```bash
+# The mode behind a point you name, as an OFT restart file:
 uv run nonmodal pseudomode --at 5e5-2.4e4j
 uv run nonmodal pseudomode --at 5e5-2.4e4j --at -1e6+3e5j --phases 8
 ```
@@ -110,10 +112,6 @@ carrying the most amplitude.
 operator. Choosing *which* point is deliberately left to you — nothing here searches the
 plane. `pseudomodes.json` records each `z`, its `sigma_min`, and the residual.
 
-You can also supply a precomputed set of complex points with
-`--grid-npy points.npy` — a flat complex array. Samples are unstructured
-throughout, so no shape is needed.
-
 ### Sampling
 
 **The region always comes from the spectrum.** There is no way to hand-pick a
@@ -123,7 +121,9 @@ features, not to sweep a chosen box at high resolution. `--bounds-pad`
 eigenvalues, and the box it picks is logged.
 
 **Resolution is asked for as dimensions, not a total.** `--grid-nx` and
-`--grid-ny` give the initial lattice (default 25x25). Keep it coarse.
+`--grid-ny` give the initial lattice (default 25x25). Keep it coarse. You can
+also supply a precomputed flat complex array with `--grid-npy points.npy`;
+samples are unstructured throughout, so no shape is needed.
 
 `Im z = 0` is always one of the sampled rows: a real operator's pseudospectrum
 is symmetric about the real axis and its contours pinch there, so it is the last
@@ -159,6 +159,8 @@ so only the upper half-plane is evaluated and the rest follows by conjugation.
 - `run_metadata.json` — sampling strategy, bounds, worker counts, input paths
 - `eigvecs_plot/xmhd2d_*.rst` — leading eigenvectors as restart files
 
+`pseudomode` writes `pseudomodes/xmhd2d_*.rst` alongside `pseudomodes.json`.
+
 `plot` adds `*_heatmap.html` and `*_contours.html`. Contours are drawn directly
 from a triangulation of the samples, so they carry no interpolation error; the
 heatmap interpolates `log10(sigma_min)` onto a regular mesh (`--plot-mesh`)
@@ -172,7 +174,7 @@ vector rather than ARPACK's random one.
 
 ## Caching — read this before trusting a result
 
-Four expensive intermediates are cached under `--cache-dir` (default `.`):
+Five expensive intermediates are cached under `--cache-dir` (default `.`):
 
 ```
 real_jacobian.npy       full_reduced_eigvals.npy
@@ -227,7 +229,22 @@ R, C, sigmin = compute_pseudospectrum(
 
 `Bounds.around_spectrum(eigvals, pad=0.3)` builds the same region `run` uses.
 
-The package ships `py.typed`.
+A pseudomode needs both halves of the Schur factorisation, since `sigma_min` is
+invariant under `A = Z T Z*` but its singular vectors are not:
+
+```python
+from nonmodal import load_or_compute_schur_vectors, pseudomode_at
+
+schur_t, schur_z = load_or_compute_schur_vectors(real_jac, cache_dir='.')
+mode = pseudomode_at(schur_t, schur_z, 5e5 - 2.4e4j)
+print(mode.sigma_min, mode.residual)   # equal, and that is what identifies it
+```
+
+`sigmin_with_mode` is the same thing without the change of basis, returning the
+vector in the Schur basis.
+
+Every module opens with a one-line index of what it exports; `help(nonmodal.io)`
+and friends are the fastest way in. The package ships `py.typed`.
 
 Two behaviours worth knowing:
 
@@ -270,6 +287,7 @@ NONMODAL_TEST_REQUIRE_DOWNLOADS=1 uv run pytest   # treat a failed download as a
 
 ```
 src/nonmodal/   the library
+examples/       the introductory notebook
 cases/          OFT input decks and submission scripts
 notebooks/      exploratory analysis
 tests/
