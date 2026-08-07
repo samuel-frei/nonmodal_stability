@@ -131,12 +131,14 @@ the block layout lives in `fields.py` rather than a vendor-named module.
   factorisation on what looks like a cache hit, and says so first. `load_or_compute_schur`
   stays vector-free on purpose: sampling works entirely in `T`, and `Z` is the same size,
   so loading it there would double the resident set for nothing.
-- **The pseudomode is the eigenvector the sampler discards.** `_shifted_resolvent_operator`
-  applies the conjugate-transpose solve *first*, making the operator
-  `(zI-T)^-1 (zI-T)^-H = V Sigma^-2 V*` — so ARPACK's eigenvector is the **right**
-  singular vector, i.e. the pseudomode. Reversing the two solves would give
-  `U Sigma^-2 U*` and silently return the left vector instead; `sigma_min` is identical
-  either way, so nothing in the sampling tests would catch it.
+- **The pseudomode is the eigenvector the sampler discards.**
+  `_shifted_resolvent_operator` is `((zI-T)*(zI-T))^-1` — the Gram-matrix formulation of
+  Wright & Trefethen (2001) §2, "solved in two stages, each using triangular system
+  solves", which is `M^-1 M^-H`. Its eigenvector is therefore the **right** singular
+  vector, i.e. the pseudomode; that follows from `M*M` and is not an artefact of how the
+  stages are ordered. Swapping them computes `(M M*)^-1`, whose eigenvalues are identical
+  — so `sigma_min` is unaffected and no sampling test would catch it — but whose
+  eigenvector is the left vector.
 - **`Im z = 0` is always a sample row** when the region straddles it
   (`_axis_through_zero`). A plain `linspace` steps over zero for even `ny`, and for
   some odd `ny` lands on ~9e-16 instead of 0.0 — which the half-plane filter

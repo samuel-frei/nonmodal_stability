@@ -54,14 +54,22 @@ def _shifted_resolvent_operator(
   T: NDArray[np.complexfloating],
   trtrs: Callable[..., Any],
 ) -> sparse.linalg.LinearOperator:
-  """`(zI - T)^-1 (zI - T)^-H`, applied through triangular solves.
+  """`((zI - T)* (zI - T))^-1`, applied through triangular solves.
 
-  Writing `zI - T = U Sigma V*`, this operator is `V Sigma^-2 V*`. So its
-  dominant eigenvalue is `1/sigma_min^2` -- which is all the sampler wants --
-  and its dominant eigenvector is the *right* singular vector, which is the
-  pseudomode at `z`. The order of the two solves is what decides that: applying
-  the conjugate-transpose solve first gives `V Sigma^-2 V*`, the other order
-  would give `U Sigma^-2 U*`.
+  The standard formulation, following Wright & Trefethen (2001) §2: compute
+  `sigma_min(zI - T) = sqrt(lambda_min((zI - T)* (zI - T)))` by inverse
+  iteration on that Gram matrix, which they note can be "solved in two stages,
+  each using triangular system solves". Solving `M* y = q` then `M x = y` gives
+  `x = M^-1 M^-H q`, which is the order below.
+
+  Writing `M = U Sigma V*`, `(M* M)^-1 = V Sigma^-2 V*`. So the dominant
+  eigenvalue is `1/sigma_min^2` -- all the sampler wants -- and the dominant
+  eigenvector is the *right* singular vector, the pseudomode at `z`. Both are
+  properties of `M* M`, not of how the two stages were arranged.
+
+  Arranging them the other way computes `(M M*)^-1`. Its eigenvalues are the
+  same, so `sigma_min` is unaffected and no sampling test would notice, but its
+  eigenvector is the left singular vector instead.
   """
   # Avoid materializing z*I, which creates an extra dense allocation.
   T1 = -T.copy()
