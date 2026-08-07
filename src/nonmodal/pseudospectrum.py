@@ -49,12 +49,20 @@ def _start_vector(n: int) -> NDArray[np.float64]:
   return np.random.default_rng(_START_VECTOR_SEED).standard_normal(n)
 
 
-def _compute_sig_for_z_from_factors(
+def _shifted_resolvent_operator(
   z: complex,
   T: NDArray[np.complexfloating],
   trtrs: Callable[..., Any],
-) -> float:
-  """Compute sigma_min(zI - T) using triangular solves on Schur factors."""
+) -> sparse.linalg.LinearOperator:
+  """`(zI - T)^-1 (zI - T)^-H`, applied through triangular solves.
+
+  Writing `zI - T = U Sigma V*`, this operator is `V Sigma^-2 V*`. So its
+  dominant eigenvalue is `1/sigma_min^2` -- which is all the sampler wants --
+  and its dominant eigenvector is the *right* singular vector, which is the
+  pseudomode at `z`. The order of the two solves is what decides that: applying
+  the conjugate-transpose solve first gives `V Sigma^-2 V*`, the other order
+  would give `U Sigma^-2 U*`.
+  """
   # Avoid materializing z*I, which creates an extra dense allocation.
   T1 = -T.copy()
   T1.flat[::T1.shape[0] + 1] += z
@@ -64,18 +72,53 @@ def _compute_sig_for_z_from_factors(
     result, _ = trtrs(T1, tmp, lower=0, trans=0, unitdiag=0)
     return result.ravel()
 
-  op = sparse.linalg.LinearOperator(
-    T1.shape,
-    matvec=_matvec,
-    dtype=np.complex128)
+  return sparse.linalg.LinearOperator(T1.shape, matvec=_matvec, dtype=np.complex128)
+
+
+def _compute_sig_for_z_from_factors(
+  z: complex,
+  T: NDArray[np.complexfloating],
+  trtrs: Callable[..., Any],
+) -> float:
+  """Compute sigma_min(zI - T) using triangular solves on Schur factors."""
+  op = _shifted_resolvent_operator(z, T, trtrs)
   # A fixed starting vector makes runs reproducible. ARPACK otherwise draws one
   # at random, so repeating a run gave slightly different values -- harmless in
   # aggregate but it makes results impossible to reproduce exactly, and on an
   # ill-conditioned operator the spread reaches ~1e-4 relative.
   vals, _ = sparse.linalg.eigsh(
-    op, k=1, which='LM', ncv=20, tol=1e-6, v0=_start_vector(T1.shape[0]))
+    op, k=1, which='LM', ncv=20, tol=1e-6, v0=_start_vector(T.shape[0]))
   sig_min = vals[0]
   return 1 / np.sqrt(sig_min)
+
+
+#: Tolerance for `sigmin_with_mode`. Tighter than the sampler's 1e-6 because an
+#: eigenvector converges more slowly than the eigenvalue it belongs to, and here
+#: the vector is the answer rather than a by-product.
+DEFAULT_MODE_TOL = 1e-8
+
+
+def sigmin_with_mode(
+  z: complex,
+  T: NDArray[np.complexfloating],
+  tol: float = DEFAULT_MODE_TOL,
+) -> tuple[float, NDArray[np.complex128]]:
+  """`sigma_min(zI - T)` and its unit right singular vector, in the Schur basis.
+
+  The same inverse iteration the sampler runs, keeping the eigenvector it
+  discards. To reach the physical basis the result must be multiplied by the
+  Schur vectors Z -- see `nonmodal.pseudomode`.
+  """
+  funcs = scipy.linalg.get_lapack_funcs(('trtrs',), (T,))
+  trtrs = cast(Callable[..., Any], funcs[0] if isinstance(funcs, list) else funcs)
+
+  op = _shifted_resolvent_operator(z, T, trtrs)
+  n = int(T.shape[0])
+  vals, vecs = sparse.linalg.eigsh(
+    op, k=1, which='LM', ncv=min(n, 20), tol=tol, v0=_start_vector(n))
+
+  mode = np.asarray(vecs[:, 0], dtype=np.complex128)
+  return float(1.0 / np.sqrt(float(vals[0]))), mode / np.linalg.norm(mode)
 
 
 def _compute_sig_point(item: tuple[int, complex]) -> tuple[int, float]:
