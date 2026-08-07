@@ -10,11 +10,19 @@ non-normal operator `sigma_min` is tiny far from any eigenvalue, and `v` is then
 a direction the operator very nearly leaves invariant even though `z` is nowhere
 near the spectrum.
 
-Nothing here re-solves anything. Sampling already runs inverse iteration on
-`(zI - T)^-1 (zI - T)^-H = V Sigma^-2 V*` at every point and discards the
-eigenvector, which *is* the pseudomode -- `sigmin_with_mode` keeps it. The only
-extra step is the change of basis: `sigma_min` is invariant under `A = Z T Z*`,
-but singular vectors are not, so the Schur vectors carry the result back:
+This runs the same inverse iteration the sampler does, at the requested point:
+`sigma_min` and its eigenvector come out of one `eigsh` call on
+`(zI - T)^-1 (zI - T)^-H = V Sigma^-2 V*`, and that eigenvector *is* the
+pseudomode. Sampling discarded it as `vals, _`; `sigmin_with_mode` keeps it.
+
+So the vector is free relative to the value -- ARPACK produces both -- but the
+solve itself is not free. Sampled vectors are not stored, so a mode costs a
+fresh iteration (~110 matvecs at the default tolerance, two triangular solves
+each) even at a point the run already visited.
+
+The genuinely new step is the change of basis. `sigma_min` is invariant under
+`A = Z T Z*`, but singular vectors are not, so the Schur vectors carry the
+result back:
 
     v_A = Z v_T
 

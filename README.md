@@ -93,9 +93,12 @@ with a known residual. Where the operator is strongly non-normal, `sigma_min` is
 far from any eigenvalue, and `v` is a direction the operator very nearly leaves
 invariant even though `z` is nowhere near the spectrum.
 
-Nothing is re-solved to get it. Sampling already runs the inverse iteration whose
-eigenvector *is* the pseudomode and throws it away; this keeps it, and multiplies by the
-Schur vectors to return it to the physical basis.
+Extraction runs the same inverse iteration the sampler runs, at the point you name.
+`sigma_min` and its eigenvector come out of one solve, and that eigenvector *is* the
+pseudomode — sampling computes it at every point and discards it. Keeping it costs
+nothing beyond the value, but the solve is still done: sampled vectors are not stored, so
+a mode is a fresh iteration even at a point the run already visited. Multiplying by the
+Schur vectors then returns it to the physical basis.
 
 Modes are written to `<output-dir>/pseudomodes/` as `.rst` restart files, the same format
 as the eigenvectors, for viewing in OFT. `--phases N` sweeps the mode's phase across `N`
