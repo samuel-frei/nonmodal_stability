@@ -169,7 +169,7 @@ def _pseudomode(*extra: str) -> PseudomodeConfig:
 
 
 def test_pseudomode_defaults_are_fully_resolved() -> None:
-  config = _pseudomode('--from-samples', 'kreiss')
+  config = _pseudomode('--at', '1+1j')
   assert isinstance(config, PseudomodeConfig)
   assert config.phases == 1
   assert config.mode_dir == 'pseudomodes'
@@ -180,26 +180,11 @@ def test_pseudomode_defaults_are_fully_resolved() -> None:
 def test_explicit_points_are_parsed_and_repeatable() -> None:
   config = _pseudomode('--at', '5e5-2.4e4j', '--at', '-1+2j')
   assert config.points == (complex(5e5, -2.4e4), complex(-1, 2))
-  assert config.from_samples == ''
 
 
-def test_from_samples_reaches_the_config() -> None:
-  assert _pseudomode('--from-samples', 'rightmost').from_samples == 'rightmost'
-
-
-def test_a_point_source_is_required() -> None:
-  with pytest.raises(ValueError, match='not both and not neither'):
-    _pseudomode()
-
-
-def test_explicit_points_conflict_with_from_samples() -> None:
-  with pytest.raises(ValueError, match='would have no effect'):
-    _pseudomode('--at', '1+1j', '--from-samples', 'kreiss')
-
-
-def test_unknown_sample_rule_is_rejected_by_argparse() -> None:
+def test_at_least_one_point_is_required() -> None:
   with pytest.raises(SystemExit):
-    parse_args(['pseudomode', '--from-samples', 'leftmost'])
+    parse_args(['pseudomode'])
 
 
 def test_malformed_complex_point_is_rejected() -> None:
@@ -219,7 +204,7 @@ def test_pseudomode_rejects_out_of_range_values(
   flags: list[str], message: str
 ) -> None:
   with pytest.raises(ValueError, match=message):
-    _pseudomode('--from-samples', 'kreiss', *flags)
+    _pseudomode('--at', '1+1j', *flags)
 
 
 def test_pseudomode_output_flags_reach_the_config() -> None:

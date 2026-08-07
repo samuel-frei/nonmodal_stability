@@ -51,12 +51,7 @@ from .operator import (  # noqa: E402
 )
 from .pipeline import plot_run, pseudomode_run, run_pipeline  # noqa: E402
 from .plotting import interpolate_to_mesh, pseudo_contours, pseudo_heatmap  # noqa: E402
-from .pseudomode import (  # noqa: E402
-  SAMPLE_RULES,
-  Pseudomode,
-  pseudomode_at,
-  select_from_samples,
-)
+from .pseudomode import Pseudomode, pseudomode_at  # noqa: E402
 from .pseudospectrum import (  # noqa: E402
   choose_contour_levels,
   compute_pseudospectrum,
@@ -89,7 +84,6 @@ __all__ = [
   'PseudomodeConfig',
   'RectangularSource',
   'RunConfig',
-  'SAMPLE_RULES',
   'SpectrumSource',
   'aligned_phase',
   'assemble_global',
@@ -116,7 +110,6 @@ __all__ = [
   'run_pipeline',
   'sample_sigmin',
   'save_samples',
-  'select_from_samples',
   'sigmin_with_mode',
   'triangle_errors',
   'uniform_points',

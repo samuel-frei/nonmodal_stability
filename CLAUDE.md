@@ -93,7 +93,7 @@ no caches, which is why `run` also saves `pseudo_eigvals.npy` for the overlay.
 | `refine.py` | error-driven Delaunay refinement |
 | `pseudospectrum.py` | `sample_sigmin`, fork-pool parallelism, contour levels |
 | `plotting.py` | tricontour contours, interpolated heatmap |
-| `pseudomode.py` | pseudomode extraction, sample-selection rules |
+| `pseudomode.py` | pseudomode extraction at an explicitly given point |
 | `io.py` | run metadata, flat sample IO |
 | `config.py` | frozen `RunConfig` / `PlotConfig` / `PseudomodeConfig` |
 | `pipeline.py` | `run_pipeline`, `plot_run`, `pseudomode_run` |

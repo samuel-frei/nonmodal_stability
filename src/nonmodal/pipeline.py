@@ -26,7 +26,7 @@ from .plotting import (
   pseudo_contours,
   pseudo_heatmap,
 )
-from .pseudomode import pseudomode_at, select_from_samples
+from .pseudomode import pseudomode_at
 from .pseudospectrum import _worker_count, choose_contour_levels, sample_sigmin
 from .refine import refine
 from .sampling import Bounds, ResolvedSource, mirror_conjugates
@@ -101,47 +101,17 @@ def run_pipeline(config: RunConfig) -> None:
     effective_workers=_worker_count(n_evaluated, config.nprocs)))
 
 
-def _pseudomode_points(
-  config: PseudomodeConfig,
-) -> tuple[list[complex], dict[str, object]]:
-  """Resolve which points to extract modes at, and record where they came from."""
-  if config.points:
-    return list(config.points), {'selection': 'explicit'}
-
-  z, sigmin, _ = load_samples(config.output_dir)
-  point, on_boundary = select_from_samples(z, sigmin, config.from_samples)
-  if on_boundary:
-    print(
-      f'WARNING: the {config.from_samples} sample sits on the edge of the '
-      f'sampled region (Re z in [{z.real.min():.6g}, {z.real.max():.6g}], '
-      f'Im z in [{z.imag.min():.6g}, {z.imag.max():.6g}]). That point is set '
-      f'by where sampling stopped, not by the operator -- the pseudospectrum '
-      f'continues past it. Widen --bounds-pad and re-run, or read this mode as '
-      f'a lower bound rather than the extremum.', flush=True)
-
-  return [point], {
-    'selection': 'from_samples',
-    'rule': config.from_samples,
-    'on_sampled_boundary': bool(on_boundary),
-    'n_samples': int(z.size),
-  }
-
-
 def pseudomode_run(config: PseudomodeConfig) -> list[str]:
-  """Extract pseudomodes at chosen points and write them as restart files."""
+  """Extract pseudomodes at the given points and write them as restart files."""
   nr_local, keep_global = build_reduction_mapping(config.jacobian)
   os.makedirs(config.output_dir, exist_ok=True)
-
-  # Resolved before the operator is touched, so a bad rule fails in seconds
-  # rather than after a factorisation.
-  points, provenance = _pseudomode_points(config)
 
   real_jac = load_or_compute_jacobian(
     config.jacobian, config.massmat, keep_global, config.cache_dir, config.timestep)
   schur_t, schur_z = load_or_compute_schur_vectors(real_jac, config.cache_dir)
   del real_jac
 
-  modes = [pseudomode_at(schur_t, schur_z, z, config.tol) for z in points]
+  modes = [pseudomode_at(schur_t, schur_z, z, config.tol) for z in config.points]
   del schur_t, schur_z
 
   mode_dir = os.path.join(config.output_dir, config.mode_dir)
@@ -155,7 +125,6 @@ def pseudomode_run(config: PseudomodeConfig) -> list[str]:
     'case_tag': config.case_tag,
     'phases': int(config.phases),
     'tol': float(config.tol),
-    'provenance': provenance,
     'modes': [m.describe() for m in modes],
     'files': [os.path.relpath(p, config.output_dir) for p in paths],
   })

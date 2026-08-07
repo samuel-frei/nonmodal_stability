@@ -10,11 +10,7 @@ import pytest
 import scipy.linalg
 
 from nonmodal.fields import FIELD_NAMES, aligned_phase, write_restart_modes
-from nonmodal.pseudomode import (
-  SAMPLE_RULES,
-  pseudomode_at,
-  select_from_samples,
-)
+from nonmodal.pseudomode import pseudomode_at
 
 h5py = pytest.importorskip('h5py')
 
@@ -94,63 +90,6 @@ def test_pseudomode_rejects_mismatched_factors() -> None:
   t, zv = _schur(_non_normal(12))
   with pytest.raises(ValueError, match='disagree'):
     pseudomode_at(t, zv[:, :5], 0.1 + 0.1j)
-
-
-# --- choosing a point out of a finished run --------------------------------
-
-
-def _samples() -> tuple[np.ndarray, np.ndarray]:
-  z = np.array([1 + 0j, 2 + 1j, -1 - 1j, 2 - 1j, 0.5 + 0.5j], dtype=np.complex128)
-  sigmin = np.array([0.5, 0.1, 0.01, 0.4, 0.2])
-  return z, sigmin
-
-
-@pytest.mark.parametrize('rule', SAMPLE_RULES)
-def test_every_rule_returns_one_of_the_samples(rule: str) -> None:
-  z, sigmin = _samples()
-  point, _ = select_from_samples(z, sigmin, rule)
-  assert point in set(z.tolist())
-
-
-def test_rules_pick_the_documented_point() -> None:
-  z, sigmin = _samples()
-  assert select_from_samples(z, sigmin, 'min-sigmin')[0] == complex(-1, -1)
-  # Largest Re z, ties broken by smallest sigma_min: 2+1j over 2-1j.
-  assert select_from_samples(z, sigmin, 'rightmost')[0] == complex(2, 1)
-  # Largest Re z / sigma_min over the right half-plane.
-  assert select_from_samples(z, sigmin, 'kreiss')[0] == complex(2, 1)
-
-
-def test_boundary_flag_marks_a_point_on_the_sampled_edge() -> None:
-  """A rightmost sample is the edge of the box, not the operator's extent."""
-  z, sigmin = _samples()
-  _, on_boundary = select_from_samples(z, sigmin, 'rightmost')
-  assert on_boundary is True
-
-
-def test_boundary_flag_is_false_for_an_interior_point() -> None:
-  z = np.array([0 + 0j, 2 + 2j, 2 - 2j, -2 + 2j, -2 - 2j, 0.1 + 0.1j])
-  sigmin = np.array([1.0, 1.0, 1.0, 1.0, 1.0, 0.001])
-  point, on_boundary = select_from_samples(z, sigmin, 'min-sigmin')
-  assert point == complex(0.1, 0.1)
-  assert on_boundary is False
-
-
-def test_kreiss_rule_needs_the_right_half_plane() -> None:
-  z = np.array([-1 + 0j, -2 + 1j], dtype=np.complex128)
-  with pytest.raises(ValueError, match='right half-plane'):
-    select_from_samples(z, np.array([0.1, 0.2]), 'kreiss')
-
-
-def test_unknown_rule_is_rejected() -> None:
-  z, sigmin = _samples()
-  with pytest.raises(ValueError, match='unknown from-samples rule'):
-    select_from_samples(z, sigmin, 'leftmost')
-
-
-def test_empty_sample_set_is_rejected() -> None:
-  with pytest.raises(ValueError, match='no samples'):
-    select_from_samples(np.zeros(0, dtype=np.complex128), np.zeros(0), 'rightmost')
 
 
 # --- restart output --------------------------------------------------------

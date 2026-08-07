@@ -67,10 +67,8 @@ class PseudomodeConfig:
   command; but it takes the point `z` as given rather than searching for one.
   """
 
-  #: Explicit points to extract modes at. Mutually exclusive with `from_samples`.
+  #: The points to extract modes at, given explicitly.
   points: tuple[complex, ...] = ()
-  #: A rule from `pseudomode.SAMPLE_RULES`, applied to a finished run's samples.
-  from_samples: str = ''
   jacobian: str = './lin_ops.h5'
   massmat: str = './mass_mat.h5'
   cache_dir: str = '.'
@@ -87,9 +85,8 @@ class PseudomodeConfig:
   case_tag: str = ''
 
   def __post_init__(self) -> None:
-    if bool(self.points) == bool(self.from_samples):
-      raise ValueError(
-        'give either --at or --from-samples, not both and not neither')
+    if not self.points:
+      raise ValueError('at least one --at point is required')
     if self.phases < 1:
       raise ValueError('phases must be >= 1')
     if self.tol <= 0.0:

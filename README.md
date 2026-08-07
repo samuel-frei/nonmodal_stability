@@ -75,14 +75,11 @@ uv run nonmodal run --grid-nx 25 --grid-ny 25 --refine-points 2600 --nprocs 32
 uv run nonmodal plot --output-dir pseudospectrum --min-level 1e-7 --nlevels 16
 ```
 
-A third subcommand extracts the mode behind a point in the plane:
+A third subcommand extracts the mode behind a point you name:
 
 ```bash
-# The mode contributing most to the transient-growth bound:
-uv run nonmodal pseudomode --from-samples kreiss --phases 8
-
-# Or a point you name yourself:
 uv run nonmodal pseudomode --at 5e5-2.4e4j
+uv run nonmodal pseudomode --at 5e5-2.4e4j --at -1e6+3e5j --phases 8
 ```
 
 `python -m nonmodal` works identically. See `cases/harris_linear_20x6z/ps1.sbatch`
@@ -106,14 +103,9 @@ files; since each file records its index as `t`, the directory reads back as a t
 series and a travelling mode animates. The default `--phases 1` writes the single phase
 carrying the most amplitude.
 
-`--from-samples` picks the point out of a finished run: `kreiss` maximises
-`Re z / sigma_min` over the right half-plane, `rightmost` and `min-sigmin` are literal.
-
-> **Read the boundary warning.** The sampled region is derived from the spectrum, so the
-> rightmost sample is the edge of that box — set by where sampling stopped, not by the
-> operator. The run says so when the chosen point lies on an edge, and records it in
-> `pseudomodes.json`. Widen `--bounds-pad` and re-run, or treat the result as a lower
-> bound.
+`--at` takes the point directly and may be repeated; several points share one load of the
+operator. Choosing *which* point is deliberately left to you — nothing here searches the
+plane. `pseudomodes.json` records each `z`, its `sigma_min`, and the residual.
 
 You can also supply a precomputed set of complex points with
 `--grid-npy points.npy` — a flat complex array. Samples are unstructured

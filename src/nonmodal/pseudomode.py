@@ -19,7 +19,7 @@ but singular vectors are not, so the Schur vectors carry the result back:
     v_A = Z v_T
 
 `Z` is produced by the same `scipy.linalg.schur` call that produces `T` and is
-now cached alongside it (`operator.SCHURVEC_CACHE`).
+cached alongside it (`operator.SCHURVEC_CACHE`).
 """
 
 from dataclasses import dataclass
@@ -28,9 +28,6 @@ import numpy as np
 from numpy.typing import NDArray
 
 from .pseudospectrum import DEFAULT_MODE_TOL, sigmin_with_mode
-
-#: Ways to pick a point out of a finished run's samples.
-SAMPLE_RULES: tuple[str, ...] = ('rightmost', 'min-sigmin', 'kreiss')
 
 
 @dataclass(frozen=True)
@@ -83,68 +80,3 @@ def pseudomode_at(
   vector = np.asarray(schur_z @ mode_t, dtype=np.complex128)
   return Pseudomode(
     z=complex(z), sigma_min=sigma, vector=vector, residual=residual)
-
-
-def _on_sampled_boundary(point: complex, z: NDArray[np.complex128]) -> bool:
-  """Whether `point` lies on an edge of the sampled region.
-
-  Compared directly against the sample extrema rather than through `Bounds`,
-  whose strict-ordering check would reject a degenerate (single row or column)
-  sample set that is otherwise perfectly answerable.
-  """
-  return bool(
-    point.real in (float(z.real.min()), float(z.real.max()))
-    or point.imag in (float(z.imag.min()), float(z.imag.max())))
-
-
-def select_from_samples(
-  z: NDArray[np.complex128],
-  sigmin: NDArray[np.float64],
-  rule: str,
-) -> tuple[complex, bool]:
-  """Pick a sample point by `rule`; also report whether it sits on the edge.
-
-  The boundary flag is not incidental. The sampled region is derived from the
-  spectrum, so the rightmost sample is the right edge of that box -- set by
-  where sampling stopped, not by the operator -- and the pseudospectrum
-  generally continues past it. Callers must say so rather than present such a
-  point as though it were the true extremum.
-
-  Rules:
-
-  * `min-sigmin` -- the most nearly singular sample. Parameter-free and
-    unambiguous, but usually sits on top of an eigenvalue.
-  * `rightmost` -- largest `Re z`, breaking ties by smallest `sigma_min`.
-    Almost always on the boundary; read the warning.
-  * `kreiss` -- largest `Re z / sigma_min` over the right half-plane, i.e. the
-    Kreiss ratio evaluated on the samples. This is the point contributing most
-    to the transient-growth lower bound. Evaluated, not optimised: the true
-    maximiser generally lies outside the sampled box.
-  """
-  z = np.asarray(z).ravel()
-  sigmin = np.asarray(sigmin).ravel()
-  if z.size == 0:
-    raise ValueError('no samples to choose a point from')
-  if z.shape != sigmin.shape:
-    raise ValueError(f'samples disagree: {z.shape} points vs {sigmin.shape} values')
-
-  if rule == 'min-sigmin':
-    index = int(np.argmin(sigmin))
-  elif rule == 'rightmost':
-    at_edge = np.flatnonzero(z.real == z.real.max())
-    index = int(at_edge[np.argmin(sigmin[at_edge])])
-  elif rule == 'kreiss':
-    right = z.real > 0.0
-    if not right.any():
-      raise ValueError(
-        'no sampled point has Re z > 0, so the Kreiss ratio is undefined here; '
-        'the sampled region never reached the right half-plane')
-    ratio = np.where(
-      right, z.real / np.maximum(sigmin, np.finfo(float).tiny), -np.inf)
-    index = int(np.argmax(ratio))
-  else:
-    raise ValueError(
-      f'unknown from-samples rule {rule!r}; choose one of {", ".join(SAMPLE_RULES)}')
-
-  chosen = complex(z[index])
-  return chosen, _on_sampled_boundary(chosen, z)

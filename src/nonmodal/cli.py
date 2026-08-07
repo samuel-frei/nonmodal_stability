@@ -26,7 +26,6 @@ from .config import (
 )
 from .operator import DEFAULT_TIMESTEP
 from .pipeline import plot_run, pseudomode_run, run_pipeline
-from .pseudomode import SAMPLE_RULES
 from .pseudospectrum import DEFAULT_MODE_TOL
 from .sampling import (
   DEFAULT_BOUNDS_PAD,
@@ -110,20 +109,11 @@ def _complex_arg(text: str) -> complex:
 
 
 def _add_pseudomode_arguments(parser: argparse.ArgumentParser) -> None:
-  where = parser.add_argument_group('where to extract')
-  where.add_argument('--at', type=_complex_arg, action='append', default=None,
-                     metavar='Z', dest='at',
-                     help='Complex point to extract a mode at, e.g. 5e5-2.4e4j. '
-                          'Repeat for several. Mutually exclusive with '
-                          '--from-samples.')
-  where.add_argument('--from-samples', type=str, default=None,
-                     choices=list(SAMPLE_RULES),
-                     help='Choose the point from a finished run in --output-dir. '
-                          '"kreiss" maximises Re z / sigma_min over the right '
-                          'half-plane, which is the point contributing most to '
-                          'the transient-growth bound; "rightmost" and '
-                          '"min-sigmin" are literal. A chosen point lying on the '
-                          'edge of the sampled region is reported as such.')
+  parser.add_argument('--at', type=_complex_arg, action='append', default=None,
+                      metavar='Z', required=True, dest='at',
+                      help='Complex point to extract a mode at, e.g. 5e5-2.4e4j. '
+                           'Repeat for several; they share one load of the '
+                           'operator.')
 
   out = parser.add_argument_group('output')
   out.add_argument('--phases', type=int, default=1,
@@ -152,8 +142,7 @@ def _add_pseudomode_arguments(parser: argparse.ArgumentParser) -> None:
                        'whose Schur factor predates the vector cache has to redo '
                        'the factorisation, since Z cannot be recovered from T.')
   op.add_argument('--output-dir', type=str, default='pseudospectrum',
-                  help='Run directory: read for --from-samples, written to for '
-                       'the modes and their metadata.')
+                  help='Directory the modes and their metadata are written to.')
   op.add_argument('--run-tag', type=str, default='',
                   help='Batch-level run identifier for metadata tracking.')
   op.add_argument('--case-tag', type=str, default='',
@@ -279,13 +268,8 @@ def plot_config_from_args(args: argparse.Namespace) -> PlotConfig:
 
 def pseudomode_config_from_args(args: argparse.Namespace) -> PseudomodeConfig:
   """Resolve parsed arguments into a `PseudomodeConfig`."""
-  if args.at and args.from_samples:
-    raise ValueError(
-      '--at names the points directly, so --from-samples would have no effect')
-
   return PseudomodeConfig(
     points=tuple(args.at) if args.at else (),
-    from_samples=args.from_samples or '',
     jacobian=args.jacobian,
     massmat=args.massmat,
     cache_dir=args.cache_dir,
