@@ -4,7 +4,12 @@ import h5py
 import numpy as np
 import pytest
 
-from nonmodal.fields import FIELD_BLOCK_COUNT, FIELD_NAMES, write_restart_eigenvectors
+from nonmodal.fields import (
+  FIELD_BLOCK_COUNT,
+  FIELD_NAMES,
+  aligned_phase,
+  write_restart_eigenvectors,
+)
 from nonmodal.matrices import assemble_global
 
 
@@ -64,11 +69,13 @@ def test_restart_roundtrip_writes_seven_field_blocks(tmp_path) -> None:
       assert f['OFT_idx_Version'][0] == 1
       assert f['t'][0] == float(idx)
 
-    # Dropped blocks stay zero; kept blocks carry the (real part of the) data.
+    # Dropped blocks stay zero; kept blocks carry the data at the phase that
+    # maximises its amplitude, since an eigenvector's phase is arbitrary.
+    vec = eigvecs[:, idx]
+    expected = np.real(vec * np.exp(-1j * aligned_phase(vec)))
     with h5py.File(path, 'r') as f:
       np.testing.assert_allclose(f[FIELD_NAMES[6]][:], np.zeros(block))
-      np.testing.assert_allclose(
-        f[FIELD_NAMES[0]][:], eigvecs[:block, idx].real)
+      np.testing.assert_allclose(f[FIELD_NAMES[0]][:], expected[:block])
 
 
 def test_restart_rejects_wrong_reduced_size(tmp_path) -> None:

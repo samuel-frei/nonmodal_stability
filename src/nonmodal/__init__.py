@@ -44,10 +44,13 @@ from .io import (  # noqa: E402
 from .matrices import HDF5Matrix, assemble_global  # noqa: E402
 from .operator import (  # noqa: E402
   DEFAULT_TIMESTEP,
-  load_or_compute_eigvals,
+  eigenvectors_from_schur,
   load_or_compute_jacobian,
   load_or_compute_schur,
   load_or_compute_schur_vectors,
+  rightmost_indices,
+  spectrum_from_schur,
+  write_eigenmode_restarts,
 )
 from .pipeline import plot_run, pseudomode_run, run_pipeline  # noqa: E402
 from .plotting import interpolate_to_mesh, pseudo_contours, pseudo_heatmap  # noqa: E402
@@ -93,7 +96,10 @@ __all__ = [
   'compute_pseudospectrum',
   'interpolate_to_mesh',
   'load_flat_grid_npy',
-  'load_or_compute_eigvals',
+  'eigenvectors_from_schur',
+  'rightmost_indices',
+  'spectrum_from_schur',
+  'write_eigenmode_restarts',
   'load_or_compute_jacobian',
   'load_or_compute_schur',
   'load_or_compute_schur_vectors',

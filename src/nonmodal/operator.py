@@ -5,9 +5,12 @@ only, so they are NOT invalidated when inputs, the timestep or `KEPT_BLOCK_IDS`
 change -- delete them by hand.
 
 * `load_or_compute_jacobian` -- the reduced effective operator `A`.
-* `load_or_compute_eigvals` -- full spectrum, plus eigenvectors as restarts.
 * `load_or_compute_schur` -- the triangular factor `T` of `A = Z T Z*`.
 * `load_or_compute_schur_vectors` -- both `T` and the unitary `Z`.
+* `spectrum_from_schur` -- the eigenvalues, which are the diagonal of `T`.
+* `rightmost_indices` / `eigenvectors_from_schur` -- eigenvectors by
+  back-substitution in `T`, mapped back through `Z`.
+* `write_eigenmode_restarts` -- the rightmost eigenvectors, out as `.rst`.
 """
 
 import os
@@ -29,7 +32,6 @@ EIGVEC_CACHE = 'full_reduced_eigvecs.npy'
 SCHUR_CACHE = 'full_reduced_schur.npy'
 #: The unitary Z of A = Z T Z*, needed to map a pseudomode back to the basis.
 SCHURVEC_CACHE = 'full_reduced_schurvecs.npy'
-SPECTRUM_PLOT = 'full_reduced_spectrum.png'
 SCHUR_PLOT = 'full_reduced_schur_eigs.png'
 DEFAULT_TIMESTEP = 1e-7
 DEFAULT_CACHE_DIR = '.'
@@ -105,36 +107,111 @@ def load_or_compute_jacobian(
   return real_jac
 
 
-def load_or_compute_eigvals(
-  real_jac: NDArray[np.float64],
+def spectrum_from_schur(
+  schur_t: NDArray[np.complexfloating],
+  cache_dir: str = DEFAULT_CACHE_DIR,
+) -> NDArray[np.complex128]:
+  """The spectrum, which is already sitting on the diagonal of `T`.
+
+  A Schur factorisation *is* an eigenvalue computation, so a separate dense
+  `eigvals` call would spend a second `O(n^3)` recomputing what `T` carries.
+  Still cached, for consumers that want the spectrum without the factor.
+  """
+  eigvals = np.asarray(schur_t.diagonal(), dtype=np.complex128)
+  _save_cached(cache_dir, EIGVAL_CACHE, eigvals)
+  return eigvals
+
+
+def rightmost_indices(
+  eigvals: NDArray[np.complexfloating],
+  n: int,
+) -> NDArray[np.intp]:
+  """Diagonal positions of the `n` rightmost eigenvalues.
+
+  Purely by real part, with no conjugate-pair handling. A real operator's
+  spectrum is conjugate-symmetric and `Re(v)` is the same vector for `v` and
+  its conjugate, so a pair does write two identical restarts -- but deciding
+  which entries are pairs means judging which roundoff counts as zero, and a
+  complex Schur form gives numerically-real eigenvalues an imaginary part of
+  ~5e-9 that lands on either side of the axis. Sorting cannot silently lose a
+  mode; that judgement can. `eigenmodes.json` records which eigenvalue each
+  file holds, so the twins are visible rather than guessed at.
+  """
+  return np.asarray(np.argsort(-eigvals.real, kind='stable')[:n], dtype=np.intp)
+
+
+#: Back-substitution through a strongly non-normal T can grow without bound;
+#: rescale before it reaches infinity. The vector is normalised at the end, so
+#: a uniform rescale costs nothing.
+_GROWTH_LIMIT = 1e150
+
+
+def eigenvectors_from_schur(
+  schur_t: NDArray[np.complexfloating],
+  schur_z: NDArray[np.complexfloating],
+  indices: NDArray[np.intp],
+) -> NDArray[np.complex128]:
+  """Right eigenvectors at the given diagonal positions, in the physical basis.
+
+  `T` is upper triangular, so the eigenvector belonging to `T[i,i]` has `y[i]=1`,
+  zeros above `i`, and the rest by back-substitution in
+  `(T[:i,:i] - lambda I) y = -T[:i,i]`. `Z y` maps it back to the basis
+  `keep_global` indexes, exactly as a pseudomode is mapped. This replaces an
+  Arnoldi solve: the factorisation has already done the work, and unshifted
+  Arnoldi cannot resolve rightmost eigenvalues that sit at 1e-6 of the
+  spectral radius anyway.
+  """
+  if schur_t.shape != schur_z.shape:
+    raise ValueError(
+      f'Schur factor {schur_t.shape} and vectors {schur_z.shape} disagree')
+
+  # A near-zero (T[j,j] - lambda) means a second eigenvalue sits on top of this
+  # one; LAPACK's trevc clamps it the same way rather than dividing by noise.
+  smin = float(np.finfo(np.float64).eps * np.abs(schur_t.diagonal()).max())
+  out = np.empty((schur_t.shape[0], indices.size), dtype=np.complex128)
+
+  for col, i in enumerate(int(k) for k in indices):
+    lam = schur_t[i, i]
+    y = np.zeros(i + 1, dtype=np.complex128)
+    y[i] = 1.0
+    for j in range(i - 1, -1, -1):
+      denom = schur_t[j, j] - lam
+      if abs(denom) < smin:
+        denom = complex(smin)
+      y[j] = -(schur_t[j, j + 1:i + 1] @ y[j + 1:]) / denom
+      if abs(y[j]) > _GROWTH_LIMIT:
+        y /= abs(y[j])
+    vec = schur_z[:, :i + 1] @ y
+    out[:, col] = vec / np.linalg.norm(vec)
+
+  return out
+
+
+def write_eigenmode_restarts(
+  schur_t: NDArray[np.complexfloating],
+  schur_z: NDArray[np.complexfloating],
   keep_global: NDArray[np.bool_],
   nr_local: int,
   output_dir: str,
   cache_dir: str = DEFAULT_CACHE_DIR,
   n_eigvecs: int = 40,
-) -> NDArray[np.complex128]:
-  """Load cached eigenvalues, or compute and cache the spectrum and eigenvectors."""
-  cached = _load_cached(cache_dir, EIGVAL_CACHE, 'eigenvalues')
-  if cached is not None:
-    return np.asarray(cached, dtype=np.complex128)
+) -> tuple[NDArray[np.complex128], list[str]]:
+  """Write the rightmost eigenvectors as restarts; returns eigenvalues and paths.
 
-  print('computing full eigenvalue spectrum with numpy.linalg.eigvals', flush=True)
-  eigvals = np.asarray(np.linalg.eigvals(real_jac), dtype=np.complex128)
-  # ncv is ARPACK's subspace size; it must exceed k with room to converge.
-  ncv = min(real_jac.shape[0], max(2 * n_eigvecs + 10, 20))
-  _, eigvecs = sparse.linalg.eigs(real_jac, k=n_eigvecs, ncv=ncv, which='LM')
-  _save_cached(cache_dir, EIGVAL_CACHE, eigvals)
+  The caller pairs the two up into the `eigenmodes.json` sidecar -- `io` cannot
+  be imported here, since it reaches this module through `config`.
+  """
+  eigvals = np.asarray(schur_t.diagonal(), dtype=np.complex128)
+  indices = rightmost_indices(eigvals, n_eigvecs)
+  chosen = eigvals[indices]
+  print(f'extracting {indices.size} eigenvectors from the Schur factor, '
+        f'rightmost Re lambda = {chosen.real.max():.6g}', flush=True)
+
+  eigvecs = eigenvectors_from_schur(schur_t, schur_z, indices)
   _save_cached(cache_dir, EIGVEC_CACHE, eigvecs)
-
-  eigvec_dir = os.path.join(output_dir, 'eigvecs_plot')
-  write_restart_eigenvectors(eigvecs, keep_global, nr_local, eigvec_dir)
-
-  plt.figure()
-  plt.scatter(eigvals.real, eigvals.imag, s=2, c='k')
-  plt.savefig(os.path.join(cache_dir, SPECTRUM_PLOT))
-  plt.close()
-
-  return eigvals
+  paths = write_restart_eigenvectors(
+    eigvecs, keep_global, nr_local, os.path.join(output_dir, 'eigvecs_plot'))
+  return chosen, paths
 
 
 def _compute_schur(
@@ -164,7 +241,12 @@ def load_or_compute_schur(
   real_jac: NDArray[np.float64],
   cache_dir: str = DEFAULT_CACHE_DIR,
 ) -> NDArray[np.complex128]:
-  """Load the cached Schur factor T, or compute and persist it."""
+  """Load the cached Schur factor T, or compute and persist it.
+
+  Nothing in `run` calls this any more -- eigenvectors need `Z`, so the pipeline
+  takes `load_or_compute_schur_vectors`. Kept as the cheap entry point for
+  anything that only samples, which never touches the basis.
+  """
   # Vectors are not loaded even when cached: same size as T, and sampling never
   # needs them. Use load_or_compute_schur_vectors when the basis matters.
   cached = _load_cached(cache_dir, SCHUR_CACHE, 'Schur factor')

@@ -93,15 +93,14 @@ def write_restart_eigenvectors(
   keep_global: NDArray[np.bool_],
   nr_local: int,
   out_dir: str,
-) -> None:
+) -> list[str]:
   """Write reduced eigenvectors as restart files, one per eigenvector.
 
-  Real part at the eigensolver's phase; `write_restart_modes` is phase-aware.
+  Phase-aligned like a pseudomode: an eigenvector's overall phase is arbitrary,
+  so taking `Re()` at whatever phase the solver returned can land near a node
+  of the mode and plot as noise.
   """
-  _check_restart_shapes(eigvecs, keep_global, nr_local)
-  os.makedirs(out_dir, exist_ok=True)
-  for i, vec in enumerate(eigvecs.T):
-    _write_restart(out_dir, i, np.real(vec), keep_global)
+  return write_restart_modes(eigvecs, keep_global, nr_local, out_dir, phases=1)
 
 
 def write_restart_modes(

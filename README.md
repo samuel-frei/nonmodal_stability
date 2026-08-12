@@ -84,8 +84,9 @@ uv run nonmodal pseudomode --at 5e5-2.4e4j
 uv run nonmodal pseudomode --at 5e5-2.4e4j --at -1e6+3e5j --phases 8
 ```
 
-`python -m nonmodal` works identically. See `cases/harris_linear_20x6z/ps1.sbatch`
-for a portable SLURM template.
+`python -m nonmodal` works identically. `cases/harris_linear_20x6z/ps1.sbatch` runs
+both steps as one SLURM job: submit it from the directory holding the exports, and
+set `NONMODAL_REPO` if this checkout is not the one it should use.
 
 ### Pseudomodes
 
@@ -157,7 +158,10 @@ so only the upper half-plane is evaluated and the rest follows by conjugation.
 - `pseudo_eigvals.npy` — the spectrum, so `plot` can draw its overlay
   standalone
 - `run_metadata.json` — sampling strategy, bounds, worker counts, input paths
-- `eigvecs_plot/xmhd2d_*.rst` — leading eigenvectors as restart files
+- `eigvecs_plot/xmhd2d_*.rst` — the rightmost eigenvectors as restart files, with
+  `eigvecs_plot/eigenmodes.json` naming which eigenvalue each file holds. Selection
+  is by real part alone, so a conjugate pair contributes two files showing the same
+  mode.
 
 `pseudomode` writes `pseudomodes/xmhd2d_*.rst` alongside `pseudomodes.json`.
 

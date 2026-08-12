@@ -16,14 +16,15 @@ from .io import (
   build_metadata,
   load_samples,
   save_samples,
+  write_eigenmodes,
   write_metadata,
   write_pseudomodes,
 )
 from .operator import (
-  load_or_compute_eigvals,
   load_or_compute_jacobian,
-  load_or_compute_schur,
   load_or_compute_schur_vectors,
+  spectrum_from_schur,
+  write_eigenmode_restarts,
 )
 from .plotting import (
   _normalize_html_name,
@@ -66,6 +67,32 @@ def _sample(
     rounds=config.refine_rounds)
 
 
+def _write_eigenmode_sidecar(
+  config: RunConfig,
+  chosen: NDArray[np.complex128],
+  paths: list[str],
+) -> None:
+  """Record which eigenvalue each restart file holds.
+
+  Selection is by real part alone, so a conjugate pair contributes two entries
+  whose `Re(v)` restarts are identical. That is visible here rather than being
+  guessed at by a tolerance in the selection.
+  """
+  eigvec_dir = os.path.join(config.output_dir, 'eigvecs_plot')
+  write_eigenmodes(eigvec_dir, {
+    'run_tag': config.run_tag,
+    'case_tag': config.case_tag,
+    'modes': [
+      {
+        'eigenvalue_real': float(lam.real),
+        'eigenvalue_imag': float(lam.imag),
+        'file': os.path.relpath(path, eigvec_dir),
+      }
+      for lam, path in zip(chosen, paths, strict=True)
+    ],
+  })
+
+
 def run_pipeline(config: RunConfig) -> None:
   """Reduce, factorise, sample, and write out a pseudospectrum run."""
   nr_local, keep_global = build_reduction_mapping(config.jacobian)
@@ -74,15 +101,23 @@ def run_pipeline(config: RunConfig) -> None:
 
   real_jac = load_or_compute_jacobian(
     config.jacobian, config.massmat, keep_global, config.cache_dir, config.timestep)
-  eigvals = load_or_compute_eigvals(
-    real_jac, keep_global, nr_local, config.output_dir, config.cache_dir,
-    config.n_eigvecs)
   # A real operator has a conjugate-symmetric spectrum, so the lower half-plane
   # is redundant. This is the actual mathematical precondition, checked on the
   # operator rather than inferred from the shape of the sample set.
-  half_plane = bool(np.isrealobj(real_jac)) and not config.force_full_plane
-  schur_t = load_or_compute_schur(real_jac, config.cache_dir)
+  real_operator = bool(np.isrealobj(real_jac))
+  half_plane = real_operator and not config.force_full_plane
+
+  # One factorisation serves all three uses: the spectrum is the diagonal of T,
+  # the eigenvectors fall out of it by back-substitution, and sampling runs in
+  # T. A separate dense eigvals call would be a second O(n^3) for nothing.
+  schur_t, schur_z = load_or_compute_schur_vectors(real_jac, config.cache_dir)
   del real_jac
+  eigvals = spectrum_from_schur(schur_t, config.cache_dir)
+  _write_eigenmode_sidecar(config, *write_eigenmode_restarts(
+    schur_t, schur_z, keep_global, nr_local, config.output_dir,
+    config.cache_dir, config.n_eigvecs))
+  # Z is the same size as T and sampling never touches it.
+  del schur_z
 
   # Bounds may be inferred from the spectrum, so the source is only concrete
   # once the eigenvalues exist.
