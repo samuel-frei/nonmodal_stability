@@ -8,6 +8,7 @@ reloading the operator.
 * `build_metadata` -- describe one run, for reproducibility.
 * `write_metadata` / `read_metadata` -- the run sidecar.
 * `write_pseudomodes` / `read_pseudomodes` -- the pseudomode sidecar.
+* `write_eigenmodes` / `read_eigenmodes` -- which eigenvalue each restart holds.
 """
 
 import json
@@ -27,6 +28,7 @@ SIGMIN_FILE = 'pseudo_sigmin.npy'
 EIGVALS_FILE = 'pseudo_eigvals.npy'
 METADATA_FILE = 'run_metadata.json'
 PSEUDOMODE_FILE = 'pseudomodes.json'
+EIGENMODE_FILE = 'eigenmodes.json'
 
 
 def build_metadata(
@@ -98,6 +100,20 @@ def write_pseudomodes(output_dir: str, payload: dict[str, Any]) -> None:
 def read_pseudomodes(output_dir: str) -> dict[str, Any]:
   """Read back the pseudomode sidecar."""
   return _read_json(output_dir, PSEUDOMODE_FILE)
+
+
+def write_eigenmodes(output_dir: str, payload: dict[str, Any]) -> None:
+  """Persist which eigenvalue each eigenvector restart file holds.
+
+  Without this a directory of `xmhd2d_*.rst` says nothing about which mode is
+  which, and a conjugate pair's two identical-looking files look like a bug.
+  """
+  _write_json(output_dir, EIGENMODE_FILE, payload, 'eigenmode metadata')
+
+
+def read_eigenmodes(output_dir: str) -> dict[str, Any]:
+  """Read back the eigenmode sidecar."""
+  return _read_json(output_dir, EIGENMODE_FILE)
 
 
 def save_samples(

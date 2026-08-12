@@ -71,8 +71,12 @@ structured/unstructured branching it used to carry.
    `load_or_compute_jacobian` assembles global matrices and forms the effective
    operator `real_jac = (spsolve(reduced_jac, reduced_mmat) - I) / DEFAULT_TIMESTEP`.
    This turns the implicit time-advance into a linear operator worth analysing.
-2. **Factorise** — full eigenvalues, 40 eigenvectors (written out as `.rst` restart
-   files), and the complex Schur factor `T` used for all sampling.
+2. **Factorise** — one complex Schur factorisation `A = Z T Z*` serves everything
+   downstream. The spectrum *is* `diag(T)`, so there is no separate `eigvals` call;
+   the 40 rightmost eigenvectors come out of the same `T` by back-substitution
+   (`eigenvectors_from_schur`) mapped back through `Z`, written as `.rst` restarts
+   with an `eigenmodes.json` naming which eigenvalue each file holds; and `T` alone
+   drives all sampling. `Z` is dropped before step 3.
 3. **Sample** — `config.source.build()` produces points; `sample_sigmin` evaluates
    them. For each `z`, inverse-power iteration via `eigsh` on a `LinearOperator`
    applying `(zI - T)^-* (zI - T)^-1` through LAPACK `trtrs` triangular solves.
@@ -88,7 +92,7 @@ no caches, which is why `run` also saves `pseudo_eigvals.npy` for the overlay.
 |---|---|
 | `matrices.py` | `HDF5Matrix`, `assemble_global` (numba) |
 | `fields.py` | 7-field block layout, reduction mask, restart output |
-| `operator.py` | reduced operator, eigenvalues, Schur factor, caching |
+| `operator.py` | reduced operator, Schur factor, eigenvalues and eigenvectors from it, caching |
 | `sampling.py` | `Bounds`, point sources, `uniform_points`, `mirror_conjugates` |
 | `refine.py` | error-driven Delaunay refinement |
 | `pseudospectrum.py` | `sample_sigmin`, fork-pool parallelism, contour levels |
@@ -128,9 +132,21 @@ the block layout lives in `fields.py` rather than a vendor-named module.
 - **`Z` cannot be recovered from a cached `T`.** `full_reduced_schurvecs.npy` is written
   by `_compute_schur` alongside `full_reduced_schur.npy`, but every run predating it has
   only the latter. `load_or_compute_schur_vectors` therefore redoes the whole `O(n^3)`
-  factorisation on what looks like a cache hit, and says so first. `load_or_compute_schur`
-  stays vector-free on purpose: sampling works entirely in `T`, and `Z` is the same size,
-  so loading it there would double the resident set for nothing.
+  factorisation on what looks like a cache hit, and says so first. `run` now needs `Z`,
+  because that is where the eigenvectors come from — so a cache dir holding only `T`
+  pays that refactorisation. Of the six `harris_linear_20x6z` cache dirs only `data/`
+  has the vectors; the other five will refactorise on their next run. That is accepted,
+  not a bug. `load_or_compute_schur` stays vector-free and is still the right entry
+  point for anything that only samples, but nothing in `run` calls it any more.
+- **Eigenvector selection is by real part alone, with no conjugate-pair handling.**
+  A real operator's pairs give identical `Re(v)`, so five of the rightmost 40 restarts
+  on the production run are redundant twins (verified `|cos| = 1`, sometimes sign-
+  flipped since `aligned_phase` resolves θ only mod π). Deduplicating them was tried and
+  removed: deciding which entries pair up means judging which roundoff counts as zero,
+  and a complex Schur form gives numerically-real eigenvalues an imaginary part of ~5e-9
+  that lands on either side of the axis. An `imag >= 0` filter silently dropped
+  `-27.9045`, the second-rightmost mode. Sorting cannot lose a mode; that judgement can.
+  `eigenmodes.json` records the eigenvalue per file, so the twins are visible.
 - **The pseudomode is the eigenvector the sampler discards.**
   `_shifted_resolvent_operator` is `((zI-T)*(zI-T))^-1` — the Gram-matrix formulation of
   Wright & Trefethen (2001) §2, "solved in two stages, each using triangular system
