@@ -28,8 +28,6 @@ from .fields import FIELD_BLOCK_COUNT, TEMPERATURE_BLOCK_ID, write_restart_eigen
 from .matrices import HDF5Matrix, assemble_global
 
 REAL_JACOBIAN_CACHE = 'real_jacobian.npy'
-EIGVAL_CACHE = 'full_reduced_eigvals.npy'
-EIGVEC_CACHE = 'full_reduced_eigvecs.npy'
 SCHUR_CACHE = 'full_reduced_schur.npy'
 #: The unitary Z of A = Z T Z*, needed to map a pseudomode back to the basis.
 SCHURVEC_CACHE = 'full_reduced_schurvecs.npy'
@@ -125,15 +123,12 @@ def load_or_compute_jacobian(
 
 def spectrum_from_schur(
   schur_t: NDArray[np.complexfloating],
-  cache_dir: str = DEFAULT_CACHE_DIR,
 ) -> NDArray[np.complex128]:
   """The spectrum, which is already sitting on the diagonal of `T`.
 
-  Cached anyway, for consumers that want it without the factor.
+  Not persisted here; `run` saves it as `pseudo_eigvals.npy` beside the samples.
   """
-  eigvals = np.asarray(schur_t.diagonal(), dtype=np.complex128)
-  _save_cached(cache_dir, EIGVAL_CACHE, eigvals)
-  return eigvals
+  return np.asarray(schur_t.diagonal(), dtype=np.complex128)
 
 
 def rightmost_indices(
@@ -192,21 +187,19 @@ def write_eigenmode_restarts(
   keep_global: NDArray[np.bool_],
   nr_local: int,
   output_dir: str,
-  cache_dir: str = DEFAULT_CACHE_DIR,
   n_eigvecs: int = 40,
 ) -> tuple[NDArray[np.complex128], list[str]]:
   """Write the rightmost eigenvectors as restarts; returns eigenvalues and paths.
 
   The caller pairs the two into `eigenmodes.json`; `io` cannot be imported here.
   """
-  eigvals = np.asarray(schur_t.diagonal(), dtype=np.complex128)
+  eigvals = spectrum_from_schur(schur_t)
   indices = rightmost_indices(eigvals, n_eigvecs)
   chosen = eigvals[indices]
   print(f'extracting {indices.size} eigenvectors from the Schur factor, '
         f'rightmost Re lambda = {chosen.real.max():.6g}', flush=True)
 
   eigvecs = eigenvectors_from_schur(schur_t, schur_z, indices)
-  _save_cached(cache_dir, EIGVEC_CACHE, eigvecs)
   paths = write_restart_eigenvectors(
     eigvecs, keep_global, nr_local, os.path.join(output_dir, 'eigvecs_plot'))
   return chosen, paths
@@ -223,8 +216,9 @@ def _compute_schur(
   schur_z = np.asarray(vectors_raw, dtype=np.complex128)
 
   os.makedirs(cache_dir, exist_ok=True)
+  spectrum = spectrum_from_schur(schur_t)
   plt.figure()
-  plt.scatter(schur_t.diagonal().real, schur_t.diagonal().imag, s=2, c='k')
+  plt.scatter(spectrum.real, spectrum.imag, s=2, c='k')
   plt.savefig(os.path.join(cache_dir, SCHUR_PLOT))
   plt.close()
 

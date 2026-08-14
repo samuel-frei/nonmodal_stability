@@ -21,15 +21,14 @@ def _factorised(n: int = 24, seed: int = 7):
 
 def test_spectrum_is_the_schur_diagonal(tmp_path) -> None:
   a, schur_t, _ = _factorised()
-  eigvals = spectrum_from_schur(schur_t, str(tmp_path))
+  eigvals = spectrum_from_schur(schur_t)
 
   # Matched by distance, since a conjugate pair's sort order is not stable.
   reference = np.linalg.eigvals(a)
   assert eigvals.size == reference.size
   assert np.abs(eigvals[:, None] - reference[None, :]).min(axis=1).max() < 1e-9
-  # Cached for consumers that want the spectrum without the factor.
-  cached = np.load(tmp_path / 'full_reduced_eigvals.npy')
-  assert np.array_equal(cached, eigvals)
+  # The spectrum is derived, never cached; `run` persists it with the samples.
+  assert not list(tmp_path.iterdir())
 
 
 def test_eigenvectors_satisfy_the_eigenvalue_equation() -> None:

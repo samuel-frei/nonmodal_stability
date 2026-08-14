@@ -105,10 +105,10 @@ def run_pipeline(config: RunConfig) -> None:
   # One factorisation serves all three: spectrum, eigenvectors, and sampling.
   schur_t, schur_z = load_or_compute_schur_vectors(real_jac, config.cache_dir)
   del real_jac
-  eigvals = spectrum_from_schur(schur_t, config.cache_dir)
+  eigvals = spectrum_from_schur(schur_t)
   _write_eigenmode_sidecar(config, *write_eigenmode_restarts(
     schur_t, schur_z, keep_global, nr_local, config.output_dir,
-    config.cache_dir, config.n_eigvecs))
+    config.n_eigvecs))
   # Z is the same size as T and sampling never touches it.
   del schur_z
 
