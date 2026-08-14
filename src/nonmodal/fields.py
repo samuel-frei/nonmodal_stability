@@ -22,6 +22,8 @@ FIELD_NAMES: tuple[str, ...] = (
 FIELD_BLOCK_COUNT = 7
 #: Keeps n, velx, velz, T and psi; drops vely (2) and by (6).
 KEPT_BLOCK_IDS = (0, 1, 3, 4, 5)
+#: Temperature block, whose mass term carries 1/(gamma-1); the rest carry 1.
+TEMPERATURE_BLOCK_ID = FIELD_NAMES.index('U_T')
 
 
 def build_reduction_mapping(jacobian_path: str) -> tuple[int, NDArray[np.bool_]]:

@@ -71,6 +71,11 @@ structured/unstructured branching it used to carry.
    `load_or_compute_jacobian` assembles global matrices and forms the effective
    operator `real_jac = (spsolve(reduced_jac, reduced_mmat) - I) / DEFAULT_TIMESTEP`.
    This turns the implicit time-advance into a linear operator worth analysing.
+   The exported `/massmat` is the **scalar** Lagrange mass matrix (`nrg` = 2220,
+   one field block) which `mass_blocks` replicates across the seven fields —
+   scaling the temperature block by `1/(gamma-1)`, exactly as `mfun_apply` in
+   OFT's `xmhd_2d.F90` does. `gamma` is read from the `oft_surf.in` beside the
+   export; nothing else in the deck reaches the operator.
 2. **Factorise** — one complex Schur factorisation `A = Z T Z*` serves everything
    downstream. The spectrum *is* `diag(T)`, so there is no separate `eigvals` call;
    the 40 rightmost eigenvectors come out of the same `T` by back-substitution
@@ -90,6 +95,7 @@ no caches, which is why `run` also saves `pseudo_eigvals.npy` for the overlay.
 
 | Module | Responsibility |
 |---|---|
+| `adapters.py` | OFT-format interop: `oft_surf.in` namelist, `gamma` |
 | `matrices.py` | `HDF5Matrix`, `assemble_global` (numba) |
 | `fields.py` | 7-field block layout, reduction mask, restart output |
 | `operator.py` | reduced operator, Schur factor, eigenvalues and eigenvectors from it, caching |
@@ -111,12 +117,27 @@ since that is how they get verified.
 ### Naming rule
 
 **Do not use `oft` / `OFT` in our identifiers.** Those names are reserved for genuine
-OpenFUSIONToolkit interop (a future `adapters.py`), so that a local module never sits
-confusingly beside the real package. This is why the HDF5 reader is `HDF5Matrix` and
-the block layout lives in `fields.py` rather than a vendor-named module.
+OpenFUSIONToolkit interop, which is what `adapters.py` now is, so that a local module
+never sits confusingly beside the real package. This is why the HDF5 reader is
+`HDF5Matrix` and the block layout lives in `fields.py` rather than a vendor-named
+module. `adapters.py` reads OFT's own file formats, so `oft_surf.in` appears there as
+a filename — but its functions are still named for what they do, not for the vendor.
 
 ## Landmines
 
+- **Every operator cache predating Aug 2026 is wrong.** The temperature mass block
+  was missing its `1/(gamma-1)` factor, so `real_jacobian.npy` and both
+  `full_reduced_schur*.npy` under every `harris_linear_20x6z` run directory were
+  built from a mass matrix that disagreed with the simulation. Caches key on
+  filename alone and will be reused blindly — **delete them by hand** before
+  rerunning. Any result derived from them, including the Apr 2026 production plots,
+  predates the fix.
+- **`gamma` comes from the data, not a flag.** `load_or_compute_jacobian` finds
+  `oft_surf.in` beside the Jacobian, walking up to three parents (run directories
+  sit under a case root that holds the canonical deck; `margin_finding/` and
+  `pseudo_marginal/` rely on this). A missing deck raises rather than assuming a
+  value, because a wrong `gamma` silently yields a wrong operator. There is
+  deliberately no `--gamma`: it is a property of the export, like the mesh.
 - **Thread pinning must stay at the top of `__init__.py`**, above every import.
   `os.environ.setdefault` for `OMP/MKL/OPENBLAS_NUM_THREADS` only takes effect before
   NumPy is first imported. Moving or reordering it silently degrades many-core runs

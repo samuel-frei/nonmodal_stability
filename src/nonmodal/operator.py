@@ -23,7 +23,8 @@ import scipy
 from numpy.typing import NDArray
 from scipy import sparse
 
-from .fields import FIELD_BLOCK_COUNT, write_restart_eigenvectors
+from .adapters import find_input_deck, read_adiabatic_index
+from .fields import FIELD_BLOCK_COUNT, TEMPERATURE_BLOCK_ID, write_restart_eigenvectors
 from .matrices import HDF5Matrix, assemble_global
 
 REAL_JACOBIAN_CACHE = 'real_jacobian.npy'
@@ -60,6 +61,18 @@ def _save_cached(cache_dir: str, filename: str, array: NDArray[Any]) -> None:
   np.save(os.path.join(cache_dir, filename), array)
 
 
+def mass_blocks(scalar_mass: Any, gamma: float) -> list[Any]:
+  """The seven field blocks of the global mass matrix, given the scalar one.
+
+  Only temperature differs: its evolution carries a factor `1/(gamma - 1)`.
+  """
+  # The export is the scalar Lagrange mass matrix, so no per-field factor can
+  # be present in it; OFT applies this one when it assembles its own operator.
+  blocks = [scalar_mass] * FIELD_BLOCK_COUNT
+  blocks[TEMPERATURE_BLOCK_ID] = scalar_mass / (gamma - 1.0)
+  return blocks
+
+
 def load_or_compute_jacobian(
   jacobian_path: str,
   massmat_path: str,
@@ -72,10 +85,14 @@ def load_or_compute_jacobian(
   if cached is not None:
     return cached
 
+  # gamma defines the operator, so it comes from the deck that ran the export.
+  gamma = read_adiabatic_index(find_input_deck(jacobian_path))
+  print(f'temperature mass block scaled by 1/(gamma-1), gamma={gamma:g}', flush=True)
+
   mmat = HDF5Matrix(massmat_path, '/massmat')
   jac = HDF5Matrix(jacobian_path, '/jacobian')
 
-  mmat_big = sparse.block_diag([mmat.csr_rep] * FIELD_BLOCK_COUNT, format='csr')
+  mmat_big = sparse.block_diag(mass_blocks(mmat.csr_rep, gamma), format='csr')
   del mmat
 
   jac_dense = assemble_global(jac.csr_rep.toarray(), nrg=jac.nrg, ncg=jac.ncg, lg=jac.lg)
