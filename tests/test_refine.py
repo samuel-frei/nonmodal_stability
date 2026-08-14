@@ -66,11 +66,7 @@ def test_refine_respects_the_budget() -> None:
 def test_refine_spends_the_whole_request_when_geometry_allows(
   wanted: int, rounds: int
 ) -> None:
-  """The per-round split must not truncate the remainder away.
-
-  Dividing the request by the round count and flooring used to lose up to
-  rounds-1 points: 600 over 7 rounds bought only 595.
-  """
+  """The whole request is placed when the geometry allows, remainder included."""
   points = uniform_points(Bounds(-1.0, 1.0, -1.0, 1.0), 12, 12)
   sigmin = _peaked_field(points)
 
@@ -97,11 +93,7 @@ def test_budget_is_a_ceiling_never_exceeded(
 
 
 def test_one_round_is_limited_by_the_triangle_count(capsys) -> None:
-  """A round inserts at most one point per triangle, so it cannot triple a set.
-
-  This is the structural reason --refine-points is a ceiling, and it must be
-  reported rather than silently absorbed.
-  """
+  """One point per triangle per round, and the shortfall is reported."""
   points = uniform_points(Bounds(-1.0, 1.0, -1.0, 1.0), 12, 12)
   sigmin = _peaked_field(points)
 
@@ -132,16 +124,14 @@ def test_refine_concentrates_points_near_the_ridge() -> None:
   sigmin = _peaked_field(points)
   added = refine(points, sigmin, _peaked_field, budget=200, rounds=4)[0][points.size:]
 
-  # The ridge sits at 0.2+0.1j; added points should cluster nearer it than a
-  # uniform draw over the same box would.
+  # The ridge sits at 0.2+0.1j; added points cluster nearer than a uniform draw.
   near = np.abs(added - (0.2 + 0.1j)).mean()
   uniform_reference = np.abs(uniform_points(bounds, 20, 20) - (0.2 + 0.1j)).mean()
   assert near < uniform_reference
 
 
 def test_refine_survives_collinear_seeds() -> None:
-  # Collinear points have no valid triangulation; refinement must give up
-  # rather than abort a long job.
+  # Collinear points have no valid triangulation.
   points = np.linspace(-1, 1, 10).astype(np.complex128)
   sigmin = np.ones(10)
   out_z, out_s = refine(points, sigmin, _peaked_field, budget=50, rounds=3)
@@ -168,16 +158,9 @@ def _grcar(n: int, k: int = 3) -> np.ndarray:
 
 
 def test_adaptive_beats_uniform_at_equal_budget() -> None:
-  """Refinement must earn its complexity: lower error for the same point count.
+  """Adaptive refinement gives lower interpolation error at equal point count.
 
-  Interpolation error is measured in log10 against a dense-SVD reference, which
-  is ground truth. If this regresses, adaptive refinement is not paying for
-  itself and should be reconsidered -- upstream deleted an earlier refinement
-  scheme for exactly that reason.
-
-  Grcar(60) is used because its dense-SVD reference is cheap. The same
-  comparison on west0479 (order 479, normality defect 0.63) measured 2.05x
-  during development.
+  Measured in log10 against a dense-SVD reference; Grcar(60) keeps that cheap.
   """
   n = 60
   A = _grcar(n)
@@ -185,8 +168,7 @@ def test_adaptive_beats_uniform_at_equal_budget() -> None:
   T = np.asarray(scipy.linalg.schur(A, output='complex')[0], dtype=np.complex128)
   bounds = Bounds.around_spectrum(eigvals, pad=0.25)
 
-  # Reference mesh, offset half a cell so no sample can land on a reference
-  # point and score a trivially perfect interpolation.
+  # Reference mesh, offset half a cell so samples never land on a reference point.
   side = 19
   dx = (bounds.real_max - bounds.real_min) / (2 * side)
   dy = (bounds.imag_max - bounds.imag_min) / (2 * side)
@@ -205,8 +187,7 @@ def test_adaptive_beats_uniform_at_equal_budget() -> None:
     assert covered.mean() > 0.99, 'sample hull should cover the reference mesh'
     return float(np.abs(got[covered] - truth[covered]).mean())
 
-  # Equal budget: a 20x20 uniform lattice, versus a coarse 12x12 start plus the
-  # same number of extra evaluations spent adaptively.
+  # Equal budget: a 20x20 lattice versus a 12x12 start plus adaptive extras.
   budget = 400
 
   z_uniform = uniform_points(bounds, 20, 20)

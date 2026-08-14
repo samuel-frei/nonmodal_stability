@@ -59,8 +59,7 @@ def _sample(
   def sample(batch: NDArray[np.complex128]) -> NDArray[np.float64]:
     return sample_sigmin(batch, schur_t, config.nprocs, 'refinement points')
 
-  # refine_points counts evaluations added on top of whatever the initial grid
-  # cost, so half-plane sampling needs no adjustment here.
+  # refine_points counts evaluations added on top of the initial grid.
   return refine(
     points, sigmin, sample,
     budget=points.size + config.refine_points,
@@ -74,9 +73,7 @@ def _write_eigenmode_sidecar(
 ) -> None:
   """Record which eigenvalue each restart file holds.
 
-  Selection is by real part alone, so a conjugate pair contributes two entries
-  whose `Re(v)` restarts are identical. That is visible here rather than being
-  guessed at by a tolerance in the selection.
+  A conjugate pair contributes two entries whose `Re(v)` restarts are identical.
   """
   eigvec_dir = os.path.join(config.output_dir, 'eigvecs_plot')
   write_eigenmodes(eigvec_dir, {
@@ -101,15 +98,11 @@ def run_pipeline(config: RunConfig) -> None:
 
   real_jac = load_or_compute_jacobian(
     config.jacobian, config.massmat, keep_global, config.cache_dir, config.timestep)
-  # A real operator has a conjugate-symmetric spectrum, so the lower half-plane
-  # is redundant. This is the actual mathematical precondition, checked on the
-  # operator rather than inferred from the shape of the sample set.
+  # A real operator's spectrum is conjugate-symmetric, so half the plane serves.
   real_operator = bool(np.isrealobj(real_jac))
   half_plane = real_operator and not config.force_full_plane
 
-  # One factorisation serves all three uses: the spectrum is the diagonal of T,
-  # the eigenvectors fall out of it by back-substitution, and sampling runs in
-  # T. A separate dense eigvals call would be a second O(n^3) for nothing.
+  # One factorisation serves all three: spectrum, eigenvectors, and sampling.
   schur_t, schur_z = load_or_compute_schur_vectors(real_jac, config.cache_dir)
   del real_jac
   eigvals = spectrum_from_schur(schur_t, config.cache_dir)
@@ -119,8 +112,7 @@ def run_pipeline(config: RunConfig) -> None:
   # Z is the same size as T and sampling never touches it.
   del schur_z
 
-  # Bounds may be inferred from the spectrum, so the source is only concrete
-  # once the eigenvalues exist.
+  # Bounds may come from the spectrum, so the source is concrete only now.
   source = config.source.resolve(eigvals)
   points, sigmin = _sample(config, source, schur_t, half_plane)
   del schur_t

@@ -105,8 +105,7 @@ def read_pseudomodes(output_dir: str) -> dict[str, Any]:
 def write_eigenmodes(output_dir: str, payload: dict[str, Any]) -> None:
   """Persist which eigenvalue each eigenvector restart file holds.
 
-  Without this a directory of `xmhd2d_*.rst` says nothing about which mode is
-  which, and a conjugate pair's two identical-looking files look like a bug.
+  This is what names the mode in a directory of `xmhd2d_*.rst`.
   """
   _write_json(output_dir, EIGENMODE_FILE, payload, 'eigenmode metadata')
 

@@ -1,17 +1,12 @@
 """Pseudospectrum checks against real matrices from the NIST Matrix Market.
 
-The synthetic tests in test_pseudospectrum.py use diagonal operators, which are
-normal and trivially conditioned. These exercise the same code on real,
-genuinely non-normal matrices, against two independent references:
+Where test_pseudospectrum.py uses diagonal operators -- normal and trivially
+conditioned -- these run the same code on genuinely non-normal ones, against two
+independent references. Downloads are cached and verified; see matrixmarket.py.
 
-* a dense SVD of `zI - T`, which is ground truth for sigma_min; and
-* the identity sigma_min(zI - A) = dist(z, spectrum), which holds exactly for
-  normal matrices and becomes a strict inequality otherwise. The size of that
-  gap is precisely what a pseudospectrum is measuring, so the non-normal cases
-  double as a check that the code detects non-normality at all rather than
-  reproducing eigenvalue distances.
-
-Downloads are cached and checksum-verified; see matrixmarket.py.
+* A dense SVD of `zI - T`, which is ground truth for sigma_min.
+* `sigma_min(zI - A) <= dist(z, spectrum)`, exact when normal and strict
+  otherwise, so the gap doubles as a check that non-normality is detected.
 """
 
 import functools
@@ -40,8 +35,7 @@ ALL_MATRICES = ['bcsstk01', *NON_NORMAL]
 def _prepared(name: str) -> tuple[NDArray[np.complex128], NDArray[np.complex128]]:
   """Return (eigenvalues, Schur factor) for a named matrix.
 
-  Cached because the Schur factorisation is the expensive part and several
-  tests reuse it.
+  Cached: the factorisation is the expensive part and several tests reuse it.
   """
   spec = MATRICES[name]
   try:
@@ -62,8 +56,7 @@ def _spectrum_bounds(
 ) -> Bounds:
   """A padded box around the spectrum.
 
-  Padding keeps sample points off the eigenvalues, where sigma_min collapses
-  toward zero and a relative comparison stops being meaningful.
+  Padding keeps points off the eigenvalues, where a relative comparison dies.
   """
   span = max(
     float(eigvals.real.max() - eigvals.real.min()),
@@ -74,8 +67,7 @@ def _spectrum_bounds(
   if symmetric:
     return Bounds(float(eigvals.real.min()) - p, float(eigvals.real.max()) + p,
                   -imag_extent, imag_extent)
-  # An off-centre box, to check nothing depends on the region straddling the
-  # real axis symmetrically.
+  # An off-centre box, not straddling the real axis symmetrically.
   return Bounds(float(eigvals.real.min()) - p, float(eigvals.real.max()) + p,
                 -imag_extent, 0.83 * imag_extent)
 
@@ -112,9 +104,7 @@ def test_sigmin_matches_dense_svd(name: str) -> None:
 def test_normal_matrix_sigmin_equals_distance_to_spectrum() -> None:
   """For a normal matrix the pseudospectrum collapses onto eigenvalue disks.
 
-  bcsstk01 is symmetric, hence normal, so sigma_min(zI - A) = dist(z, spectrum)
-  holds exactly. This is the closed-form check from the synthetic suite, on a
-  real matrix.
+  bcsstk01 is symmetric, so sigma_min(zI - A) = dist(z, spectrum) exactly.
   """
   spec = MATRICES['bcsstk01']
   assert spec.symmetric
@@ -132,8 +122,7 @@ def test_normal_matrix_sigmin_equals_distance_to_spectrum() -> None:
 def test_resolvent_lower_bound_holds(name: str) -> None:
   """sigma_min(zI - A) <= dist(z, spectrum) for every matrix.
 
-  Equivalent to ||(zI - A)^-1|| >= 1 / dist(z, spectrum), which is a theorem,
-  so a violation beyond round-off means the sampled values are wrong.
+  Equivalent to the theorem ||(zI - A)^-1|| >= 1 / dist(z, spectrum).
   """
   eigvals, T = _prepared(name)
   bounds = _spectrum_bounds(eigvals)
@@ -147,11 +136,7 @@ def test_resolvent_lower_bound_holds(name: str) -> None:
 
 @pytest.mark.parametrize('name', NON_NORMAL)
 def test_nonnormality_produces_a_strict_gap(name: str) -> None:
-  """Non-normal matrices must show sigma_min strictly below the eigenvalue distance.
-
-  Without this, a bug that simply returned dist(z, spectrum) would pass every
-  other check here.
-  """
+  """Non-normal matrices show sigma_min strictly below the eigenvalue distance."""
   eigvals, T = _prepared(name)
   bounds = _spectrum_bounds(eigvals)
 

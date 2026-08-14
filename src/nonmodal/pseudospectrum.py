@@ -33,13 +33,12 @@ def _init_worker_from_parent() -> None:
   global _worker_T, _worker_trtrs
   if _worker_T is None:
     raise RuntimeError('worker did not inherit operator matrix')
-  # get_lapack_funcs returns one callable per requested name, but scipy-stubs
-  # types the result as list-or-single, so narrow it explicitly.
+  # scipy-stubs types get_lapack_funcs as list-or-single, so narrow it.
   funcs = scipy.linalg.get_lapack_funcs(('trtrs',), (_worker_T,))
   _worker_trtrs = cast(Callable[..., Any], funcs[0] if isinstance(funcs, list) else funcs)
 
 
-#: Pseudo-random, to dodge the orthogonality an all-ones vector can hit.
+#: Seeds the fixed, pseudo-random ARPACK start vector.
 _START_VECTOR_SEED = 20260805
 
 
@@ -55,14 +54,9 @@ def _shifted_resolvent_operator(
   trtrs: Callable[..., Any],
 ) -> sparse.linalg.LinearOperator:
   """`((zI - T)* (zI - T))^-1`, applied through triangular solves."""
-  # Wright & Trefethen (2001) §2: sigma_min = sqrt(lambda_min(M* M)) by inverse
-  # iteration, "solved in two stages, each using triangular system solves".
-  # Solving M* y = q then M x = y is x = M^-1 M^-H q, which is (M* M)^-1. Its
-  # eigenvector is therefore the right singular vector -- the pseudomode -- a
-  # property of M*M and not of the ordering. The other arrangement gives
-  # (M M*)^-1: identical eigenvalues, so sigma_min and every sampling test are
-  # unaffected, but the eigenvector becomes the left one.
-  # Avoid materializing z*I, which creates an extra dense allocation.
+  # Wright & Trefethen (2001) §2, in two stages of triangular solves: M* y = q
+  # then M x = y, giving (M* M)^-1, whose eigenvector is the right singular
+  # vector -- the pseudomode. The shift is written onto the diagonal in place.
   T1 = -T.copy()
   T1.flat[::T1.shape[0] + 1] += z
 
@@ -81,10 +75,7 @@ def _compute_sig_for_z_from_factors(
 ) -> float:
   """Compute sigma_min(zI - T) using triangular solves on Schur factors."""
   op = _shifted_resolvent_operator(z, T, trtrs)
-  # A fixed starting vector makes runs reproducible. ARPACK otherwise draws one
-  # at random, so repeating a run gave slightly different values -- harmless in
-  # aggregate but it makes results impossible to reproduce exactly, and on an
-  # ill-conditioned operator the spread reaches ~1e-4 relative.
+  # The fixed start vector makes repeated runs bitwise identical.
   vals, _ = sparse.linalg.eigsh(
     op, k=1, which='LM', ncv=20, tol=1e-6, v0=_start_vector(T.shape[0]))
   sig_min = vals[0]
@@ -214,14 +205,13 @@ def choose_contour_levels(
   data_min = float(np.min(vals[mask]))
   data_max = float(np.max(vals[mask]))
 
-  # Use geometric spacing across finite data. If the requested minimum level
-  # exceeds data_max, fall back to full data range so contours remain meaningful.
+  # Geometric spacing across the finite data, from min_level where it fits.
   if min_level < data_max:
     lo = max(min_level, data_min)
   else:
     lo = data_min
   hi = data_max
   if hi <= lo:
-    # Keep at least two boundaries for degenerate/near-constant fields.
+    # A near-constant field still gets two distinct boundaries.
     return np.array([lo, np.nextafter(lo, np.inf)])
   return np.geomspace(lo, hi, nlevels)

@@ -43,8 +43,6 @@ indent-style = "space"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
-# Loop variables named for maths conventions (R, C, T) are intentional.
-ignore = ["E741"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

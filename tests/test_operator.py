@@ -23,8 +23,7 @@ def test_spectrum_is_the_schur_diagonal(tmp_path) -> None:
   a, schur_t, _ = _factorised()
   eigvals = spectrum_from_schur(schur_t, str(tmp_path))
 
-  # Matched by distance, not by sorting: a conjugate pair's real parts differ
-  # only in the last bits, so any sort order flips between the two routines.
+  # Matched by distance, since a conjugate pair's sort order is not stable.
   reference = np.linalg.eigvals(a)
   assert eigvals.size == reference.size
   assert np.abs(eigvals[:, None] - reference[None, :]).min(axis=1).max() < 1e-9
@@ -63,12 +62,9 @@ def test_eigenvectors_match_a_dense_solver() -> None:
 
 
 def test_selection_is_by_real_part_alone() -> None:
-  """No conjugate-pair handling: both members are selected, nothing is dropped.
+  """Selection is by real part alone: both members of a pair are kept.
 
-  The pairing used to be inferred, and a complex Schur form gives numerically
-  real eigenvalues a roundoff imaginary part (~5e-9 on the production
-  operator) that lands on either side of the axis -- which cost the
-  second-rightmost mode. Sorting cannot lose one.
+  A roundoff imaginary part of ~5e-9 must not disqualify a real eigenvalue.
   """
   eigvals = np.array([-1 + 2j, -1 - 2j, -5 + 0j, -3 + 1j, -3 - 1j])
 
@@ -90,7 +86,7 @@ def test_near_degenerate_diagonal_does_not_blow_up() -> None:
   """A repeated eigenvalue clamps rather than dividing by ~0."""
   n = 6
   schur_t = np.triu(np.ones((n, n), dtype=np.complex128))
-  # Two identical diagonal entries: the unguarded back-substitution divides by 0.
+  # Two identical diagonal entries, so back-substitution meets a zero denominator.
   schur_t[np.diag_indices(n)] = np.array([2.0, 2.0, 3.0, 4.0, 5.0, 6.0])
   schur_z = np.eye(n, dtype=np.complex128)
 

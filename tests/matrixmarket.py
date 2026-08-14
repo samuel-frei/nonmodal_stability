@@ -1,13 +1,11 @@
 """Fetch test matrices from the NIST Matrix Market.
 
 Downloads are cached on disk and checksum-verified, so the suite runs offline
-once warmed and cannot silently absorb a change in upstream content.
+once warmed and pins the exact upstream content it was written against.
 
 Cache location: ``$NONMODAL_TEST_DATA``, else ``tests/_data/`` (gitignored).
-
-Set ``NONMODAL_TEST_REQUIRE_DOWNLOADS=1`` to turn a failed download into an
-error instead of a skip. CI sets it; an offline compute node should not, so
-that `uv run pytest` there skips these rather than failing.
+``NONMODAL_TEST_REQUIRE_DOWNLOADS=1`` makes a failed download an error instead
+of a skip; CI sets it, and an offline compute node leaves it unset.
 """
 
 import gzip
@@ -42,13 +40,11 @@ class MatrixSpec:
   name: str
   sha256: str
   order: int
-  #: Symmetric matrices are normal, so sigma_min(zI - A) == dist(z, spectrum)
-  #: exactly. Non-normal ones only satisfy the inequality.
+  #: Symmetric hence normal, making sigma_min(zI - A) == dist(z, spectrum) exact.
   symmetric: bool
   #: ||AA* - A*A|| / ||A||^2 -- 0 for normal, larger means more non-normal.
   normality_defect: float
-  #: Tolerance against a dense-SVD reference. Most agree to ~1e-12; bcsstk01 is
-  #: a badly conditioned stiffness matrix, where eigsh's tol=1e-6 dominates.
+  #: Tolerance against a dense-SVD reference; most agree to ~1e-12.
   svd_rtol: float = 1e-9
 
   @property
@@ -60,13 +56,13 @@ class MatrixSpec:
     return f'{self.name}.mtx.gz'
 
 
-# Chosen to span the normality range: bcsstk01 is exactly normal and gives an
-# exact identity to test against; west0479 is the classic strongly non-normal
-# pseudospectra example (Trefethen), kept for the slow test.
+# Spanning the normality range, from exactly normal (bcsstk01) to strongly
+# non-normal (west0479, the classic Trefethen pseudospectra example).
 MATRICES: dict[str, MatrixSpec] = {
   'bcsstk01': MatrixSpec(
     collection='Harwell-Boeing', set_name='bcsstruc1', name='bcsstk01',
     sha256='567560f75b952d9c14c0d193ded5d80370d7ca26fe49f9e67deee55f22e55699',
+    # Badly conditioned stiffness matrix, so eigsh's tol=1e-6 sets the accuracy.
     order=48, symmetric=True, normality_defect=0.0, svd_rtol=1e-3),
   'olm100': MatrixSpec(
     collection='NEP', set_name='olmstead', name='olm100',
@@ -111,8 +107,7 @@ def _verify(payload: bytes, spec: MatrixSpec) -> None:
 def fetch(spec: MatrixSpec) -> pathlib.Path:
   """Return a path to the cached .mtx.gz, downloading it if necessary.
 
-  A cached file that fails verification is removed and re-fetched once, so a
-  truncated download does not poison the cache permanently.
+  A cached file failing verification is removed and re-fetched exactly once.
   """
   target = cache_dir() / spec.filename
 

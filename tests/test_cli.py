@@ -40,7 +40,7 @@ def test_run_defaults_are_fully_resolved() -> None:
 
 
 def test_the_region_always_comes_from_the_spectrum() -> None:
-  """There is no way to hand-pick a rectangle any more."""
+  """The sampled region is always inferred from the spectrum."""
   source = _run().source
   assert isinstance(source, SpectrumSource)
   assert source.pad == pytest.approx(0.3)

@@ -9,11 +9,11 @@ caches the reduced operator, `sampling` and `refine` decide where to evaluate,
 `pseudospectrum` evaluates, `pseudomode` extracts a single mode, `plotting`
 renders, and `config`/`cli`/`pipeline` tie them together.
 
-IMPORTANT: the BLAS thread limits below must be set before NumPy is first
-imported or they have no effect, and must stay above every import here. Sampling
-runs a `fork` pool that unpinned BLAS threads would oversubscribe -- degrading
-many-core runs silently rather than erroring. `setdefault`, not assignment, so a
-caller who sets threads before importing keeps their choice.
+IMPORTANT: the BLAS thread limits below take effect only when set before NumPy
+is first imported, so they stay above every import here -- which is what the
+`# noqa: E402` markers record. Sampling runs a `fork` pool, which one BLAS
+thread per worker keeps from oversubscribing. `setdefault` leaves the choice to
+a caller who sets threads before importing.
 """
 
 import os

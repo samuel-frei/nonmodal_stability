@@ -3,8 +3,8 @@
 Three subcommands, because their requirements differ: `run` needs the HDF5
 matrices and a machine with cores, `pseudomode` needs the operator but not the
 cores, `plot` needs only a finished output directory. This is the only module
-that touches `argparse.Namespace`. Flags that cannot take effect are rejected
-rather than ignored, since a two-day job silently missing a flag is worse.
+that touches `argparse.Namespace`. A flag that cannot take effect in the given
+mode raises rather than being ignored.
 
 * `build_parser` / `parse_args` -- the argparse surface.
 * `run_config_from_args` / `pseudomode_config_from_args` /
@@ -189,11 +189,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def _point_source(args: argparse.Namespace) -> PointSource:
   """Choose where to sample from: always the spectrum, or a supplied point set."""
-  # There is no hand-picked rectangle: this tool refines onto features rather
-  # than sweeping a chosen box. --grid-npy is the escape hatch for a foreign set.
+  # The region is always the spectrum's; --grid-npy supplies a foreign set.
   if args.grid_npy:
-    # A supplied point set fixes both the region and the resolution, so the
-    # lattice and padding flags cannot take effect.
+    # That set fixes region and resolution, so the lattice flags are inert.
     inert = [
       flag for flag, given in (
         ('--grid-nx', args.grid_nx != DEFAULT_GRID_NX),

@@ -36,8 +36,7 @@ def test_sigmin_matches_closed_form_on_a_centred_grid() -> None:
 
 
 def test_sigmin_matches_closed_form_off_centre() -> None:
-  # compute_pseudospectrum never mirrors, so an arbitrary (non-conjugate-
-  # symmetric) spectrum over an off-centre box is fair game.
+  # compute_pseudospectrum never mirrors, so the spectrum need not be symmetric.
   diag = np.array([1 + 0.5j, -2 + 1j, 0.5 - 1.5j, 3 + 0j], dtype=np.complex128)
   R, C, sigmin = compute_pseudospectrum(
     np.diag(diag), Bounds(-4.0, 4.0, -3.0, 2.5), nx=4, ny=4, nprocs=1)
@@ -64,12 +63,7 @@ def test_sample_sigmin_handles_empty_input() -> None:
 
 
 def test_sampling_is_bitwise_reproducible() -> None:
-  """Repeating a run must give identical numbers.
-
-  ARPACK draws a random start vector unless given one, which made results
-  irreproducible; on an ill-conditioned operator the spread reached ~1e-4
-  relative. `_start_vector` pins it.
-  """
+  """Repeating a run gives bitwise identical numbers, via `_start_vector`."""
   rng = np.random.default_rng(11)
   T = np.triu(rng.normal(size=(10, 10)) + 1j * rng.normal(size=(10, 10)))
   z = np.array([0.3 + 0.4j, -1.0 + 0.2j, 2.0 - 0.5j], dtype=np.complex128)
@@ -82,8 +76,7 @@ def test_sampling_is_bitwise_reproducible() -> None:
 def test_half_plane_mirroring_matches_full_sampling() -> None:
   """A real operator's pseudospectrum is symmetric, so mirroring is exact.
 
-  This is the precondition the pipeline checks with np.isrealobj: sampling the
-  upper half-plane and conjugating must reproduce what full sampling gives.
+  Sampling the upper half-plane and conjugating reproduces full sampling.
   """
   rng = np.random.default_rng(3)
   A = rng.normal(size=(8, 8))
@@ -117,8 +110,7 @@ def test_contour_levels_clamp_min_level_to_data() -> None:
 
 
 def test_contour_levels_near_constant_field() -> None:
-  # Degenerate field: two distinct boundaries are still returned so contouring
-  # has something to draw.
+  # A constant field still yields two distinct boundaries.
   levels = choose_contour_levels(np.full((3, 3), 0.25), min_level=1e-7, nlevels=5)
   assert levels.shape == (2,)
   assert levels[1] > levels[0]

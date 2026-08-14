@@ -47,8 +47,7 @@ def assemble_global(
   lg: NDArray[np.int64],
 ) -> NDArray[np.float64]:
   """Scatter a local matrix into a dense global matrix using the `lg` mapping."""
-  # Both loop bounds come from inmat.shape[0], so a rectangular input would be
-  # mis-assembled rather than rejected.
+  # Both loop bounds use inmat.shape[0], so the local matrix must be square.
   if inmat.shape[0] != inmat.shape[1]:
     raise ValueError('assemble_global requires a square local matrix')
   outmat = np.zeros((nrg, ncg))

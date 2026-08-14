@@ -48,15 +48,12 @@ def refine(
 
   `budget` is a ceiling: one insertion per triangle per round caps each round.
   """
-  # One `sample` call per round keeps the worker pool saturated. Degenerate
-  # input -- too few points, collinear seeds, a triangulation Qhull refuses --
-  # ends refinement early rather than aborting a long-running job.
+  # One `sample` call per round; degenerate input returns what has been sampled.
   if rounds < 1 or budget <= points.size:
     return points, sigmin
 
   wanted = budget - points.size
-  # Spread the remainder over the early rounds instead of truncating it away,
-  # which used to lose up to rounds-1 points for no reason.
+  # The remainder is spread one point at a time over the earliest rounds.
   base, extra = divmod(wanted, rounds)
 
   for round_index in range(rounds):
@@ -85,7 +82,7 @@ def refine(
     centroids = xy[tri.simplices[worst]].mean(axis=1)
     candidates = np.asarray(
       centroids[:, 0] + 1j * centroids[:, 1], dtype=np.complex128)
-    # Duplicated points would make the next triangulation degenerate.
+    # Keep only centroids not already in the sample set.
     candidates = np.setdiff1d(np.unique(candidates), points)
     if candidates.size == 0:
       break

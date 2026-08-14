@@ -2,8 +2,7 @@
 
 Sample sets are flat arrays of complex points, never meshes; structure returns
 only at plotting time. The initial grid is coarse and always derived from the
-spectrum, since this tool refines onto features rather than sweeping a chosen
-box, so resolution is asked for as `nx` by `ny` and not as a point total.
+spectrum, and its resolution is given as `nx` by `ny` rather than a point total.
 
 * `Bounds` -- an axis-aligned box, with constructors from a spectrum or points.
 * `uniform_points` -- a flat lattice covering a box, including its edges.
@@ -66,15 +65,13 @@ class Bounds:
 
 def _axis_through_zero(lo: float, hi: float, n: int) -> NDArray[np.float64]:
   """`n` points spanning [lo, hi], with an exact 0.0 when the span straddles it."""
-  # A plain linspace steps over zero for even n and can land on ~9e-16 for odd n;
-  # both break the exact comparisons downstream. See the CLAUDE.md landmine.
+  # Each side is built separately so that 0.0 is exact rather than approached.
   if lo >= 0.0 or hi <= 0.0:
     return np.linspace(lo, hi, n)
   if n == 1:
     return np.zeros(1)
 
-  # Split the interior points between the two sides in proportion to their
-  # widths, so the spacing stays as even as the counts allow.
+  # Interior points split between the sides in proportion to their widths.
   interior = n - 1
   below = int(round(interior * (-lo) / (hi - lo)))
   below = min(max(below, 1), interior - 1) if interior >= 2 else interior
@@ -132,7 +129,7 @@ DEFAULT_GRID_NY = 25
 class RectangularSource:
   """Sample a uniform lattice of `nx` by `ny` points over a box.
 
-  Dimensions are explicit; a total would have to be factored back into a shape.
+  Both dimensions are given explicitly, never a point total.
   """
 
   bounds: Bounds

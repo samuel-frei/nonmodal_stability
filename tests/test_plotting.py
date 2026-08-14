@@ -41,8 +41,7 @@ def test_safe_log10_masks_nonpositive() -> None:
 def _log_linear(z: np.ndarray) -> np.ndarray:
   """A field whose log10 is exactly linear in (Re z, Im z).
 
-  Linear interpolation is then exact, so any discrepancy is a real defect
-  rather than discretisation error.
+  Linear interpolation is then exact, to machine precision.
   """
   return np.asarray(10.0 ** (0.5 * z.real + 0.25 * z.imag))
 
@@ -94,18 +93,13 @@ def test_contours_written_from_samples(tmp_path, samples) -> None:
 
   html = (tmp_path / 'c.html').read_text()
   names = set(re.findall(r'"name":"([^"]+)"', html))
-  # Each level is labelled in epsilon units, not log10, and the label must
-  # match the contour it was drawn for.
+  # Each level is labelled in epsilon units rather than log10.
   for level in levels:
     assert f'{level:.2e}' in names, f'no trace labelled for level {level:.2e}'
 
 
 def test_contour_labels_survive_levels_matplotlib_drops(tmp_path, samples) -> None:
-  """Levels outside the data range are dropped; remaining labels must not shift.
-
-  Zipping the requested levels against the drawn segments would silently
-  mislabel every contour once one is dropped.
-  """
+  """Levels outside the data range are dropped, and the rest stay correctly labelled."""
   z, sigmin, eigvals = samples
   in_range = 1.0
   levels = np.array([1e-6, in_range, 1e6])  # first and last lie outside

@@ -3,7 +3,7 @@
 Samples arrive flat, so structure is reintroduced here: contours from
 `tricontour` on a Delaunay triangulation of the samples themselves, the heatmap
 by interpolation because a raster needs a mesh. Both work in log10(sigma_min),
-which spans orders of magnitude and would otherwise misplace the contours.
+which spans orders of magnitude.
 
 * `pseudo_contours` -- contours drawn directly from the sampled points.
 * `pseudo_heatmap` -- a raster, via interpolation onto a regular mesh.
@@ -134,7 +134,7 @@ def pseudo_contours(
 
   tri = _triangulation(z)
   values = _safe_log10(sigmin)
-  # tricontour cannot handle NaN vertices; mask any triangle touching one.
+  # Mask every triangle touching a NaN vertex, which tricontour cannot take.
   bad = ~np.isfinite(values)
   if bad.any():
     tri.set_mask(bad[tri.triangles].any(axis=1))
@@ -142,15 +142,12 @@ def pseudo_contours(
 
   fig = go.Figure()
 
-  # tricontour needs an Axes to draw into; the figure is never rendered, only
-  # mined for its contour vertices.
+  # tricontour needs an Axes; the figure is mined for vertices, never rendered.
   figure = plt.figure()
   try:
     ax = figure.add_subplot(111)
     cs = ax.tricontour(tri, values, levels=np.log10(levels))
-    # Pair against cs.levels rather than the requested levels: matplotlib may
-    # drop levels that fall outside the data range, and zipping the requested
-    # list against allsegs would then label contours with the wrong epsilon.
+    # cs.levels holds the levels actually drawn, so it aligns with allsegs.
     drawn = np.power(10.0, np.asarray(cs.levels, dtype=float))
     palette = _level_colours(len(drawn))
     for level_value, colour, segs in zip(

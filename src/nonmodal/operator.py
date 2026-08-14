@@ -39,8 +39,7 @@ DEFAULT_CACHE_DIR = '.'
 
 def _load_cached(cache_dir: str, filename: str, label: str) -> NDArray[Any] | None:
   """Return a cached array, or None if it is absent or unreadable."""
-  # A hit logs path and mtime: the cheapest guard against silently computing
-  # with a stale operator, since the key is the filename alone.
+  # A hit logs path and mtime; the cache key is the filename alone.
   path = os.path.abspath(os.path.join(cache_dir, filename))
   try:
     array = np.load(path)
@@ -113,9 +112,7 @@ def spectrum_from_schur(
 ) -> NDArray[np.complex128]:
   """The spectrum, which is already sitting on the diagonal of `T`.
 
-  A Schur factorisation *is* an eigenvalue computation, so a separate dense
-  `eigvals` call would spend a second `O(n^3)` recomputing what `T` carries.
-  Still cached, for consumers that want the spectrum without the factor.
+  Cached anyway, for consumers that want it without the factor.
   """
   eigvals = np.asarray(schur_t.diagonal(), dtype=np.complex128)
   _save_cached(cache_dir, EIGVAL_CACHE, eigvals)
@@ -126,23 +123,14 @@ def rightmost_indices(
   eigvals: NDArray[np.complexfloating],
   n: int,
 ) -> NDArray[np.intp]:
-  """Diagonal positions of the `n` rightmost eigenvalues.
+  """Diagonal positions of the `n` rightmost eigenvalues, by real part alone.
 
-  Purely by real part, with no conjugate-pair handling. A real operator's
-  spectrum is conjugate-symmetric and `Re(v)` is the same vector for `v` and
-  its conjugate, so a pair does write two identical restarts -- but deciding
-  which entries are pairs means judging which roundoff counts as zero, and a
-  complex Schur form gives numerically-real eigenvalues an imaginary part of
-  ~5e-9 that lands on either side of the axis. Sorting cannot silently lose a
-  mode; that judgement can. `eigenmodes.json` records which eigenvalue each
-  file holds, so the twins are visible rather than guessed at.
+  A conjugate pair therefore yields two entries with identical `Re(v)`.
   """
   return np.asarray(np.argsort(-eigvals.real, kind='stable')[:n], dtype=np.intp)
 
 
-#: Back-substitution through a strongly non-normal T can grow without bound;
-#: rescale before it reaches infinity. The vector is normalised at the end, so
-#: a uniform rescale costs nothing.
+#: Back-substitution rescales whenever a component grows past this.
 _GROWTH_LIMIT = 1e150
 
 
@@ -153,20 +141,14 @@ def eigenvectors_from_schur(
 ) -> NDArray[np.complex128]:
   """Right eigenvectors at the given diagonal positions, in the physical basis.
 
-  `T` is upper triangular, so the eigenvector belonging to `T[i,i]` has `y[i]=1`,
-  zeros above `i`, and the rest by back-substitution in
-  `(T[:i,:i] - lambda I) y = -T[:i,i]`. `Z y` maps it back to the basis
-  `keep_global` indexes, exactly as a pseudomode is mapped. This replaces an
-  Arnoldi solve: the factorisation has already done the work, and unshifted
-  Arnoldi cannot resolve rightmost eigenvalues that sit at 1e-6 of the
-  spectral radius anyway.
+  `T` upper triangular, so `T[i,i]`'s vector back-substitutes; `Z y` maps back.
   """
+  # y[i] = 1, zeros above i, rest from (T[:i,:i] - lambda I) y = -T[:i,i].
   if schur_t.shape != schur_z.shape:
     raise ValueError(
       f'Schur factor {schur_t.shape} and vectors {schur_z.shape} disagree')
 
-  # A near-zero (T[j,j] - lambda) means a second eigenvalue sits on top of this
-  # one; LAPACK's trevc clamps it the same way rather than dividing by noise.
+  # Floor on the denominator, as LAPACK trevc uses for repeated eigenvalues.
   smin = float(np.finfo(np.float64).eps * np.abs(schur_t.diagonal()).max())
   out = np.empty((schur_t.shape[0], indices.size), dtype=np.complex128)
 
@@ -198,8 +180,7 @@ def write_eigenmode_restarts(
 ) -> tuple[NDArray[np.complex128], list[str]]:
   """Write the rightmost eigenvectors as restarts; returns eigenvalues and paths.
 
-  The caller pairs the two up into the `eigenmodes.json` sidecar -- `io` cannot
-  be imported here, since it reaches this module through `config`.
+  The caller pairs the two into `eigenmodes.json`; `io` cannot be imported here.
   """
   eigvals = np.asarray(schur_t.diagonal(), dtype=np.complex128)
   indices = rightmost_indices(eigvals, n_eigvecs)
@@ -231,8 +212,7 @@ def _compute_schur(
   plt.close()
 
   _save_cached(cache_dir, SCHUR_CACHE, schur_t)
-  # Saved unconditionally: it is already computed, and recovering it later
-  # means redoing the whole factorisation.
+  # Saved unconditionally; Z cannot be recovered from T alone.
   _save_cached(cache_dir, SCHURVEC_CACHE, schur_z)
   return schur_t, schur_z
 
@@ -243,12 +223,8 @@ def load_or_compute_schur(
 ) -> NDArray[np.complex128]:
   """Load the cached Schur factor T, or compute and persist it.
 
-  Nothing in `run` calls this any more -- eigenvectors need `Z`, so the pipeline
-  takes `load_or_compute_schur_vectors`. Kept as the cheap entry point for
-  anything that only samples, which never touches the basis.
+  The cheap entry point for anything that only samples, so `Z` is never loaded.
   """
-  # Vectors are not loaded even when cached: same size as T, and sampling never
-  # needs them. Use load_or_compute_schur_vectors when the basis matters.
   cached = _load_cached(cache_dir, SCHUR_CACHE, 'Schur factor')
   if cached is not None:
     return np.asarray(cached, dtype=np.complex128)
@@ -261,8 +237,7 @@ def load_or_compute_schur_vectors(
   cache_dir: str = DEFAULT_CACHE_DIR,
 ) -> tuple[NDArray[np.complex128], NDArray[np.complex128]]:
   """Load or compute both halves of A = Z T Z*."""
-  # Z cannot be recovered from a cached T, so a run predating the vector cache
-  # redoes the O(n^3) factorisation -- reported rather than done quietly.
+  # Both halves must be cached to skip the factorisation; T alone redoes it.
   cached_t = _load_cached(cache_dir, SCHUR_CACHE, 'Schur factor')
   cached_z = _load_cached(cache_dir, SCHURVEC_CACHE, 'Schur vectors')
   if cached_t is not None and cached_z is not None:

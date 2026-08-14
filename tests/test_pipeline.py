@@ -45,11 +45,7 @@ def test_refine_points_are_spent_on_top_of_the_initial_grid() -> None:
 
 
 def test_half_plane_does_not_shrink_the_refinement_budget() -> None:
-  """The initial grid halves, but refine_points still buys what it says.
-
-  The old budget-splitting scheme had to halve the target alongside the grid;
-  counting extra evaluations removes that coupling.
-  """
+  """The initial grid halves, but refine_points still buys what it says."""
   eigvals, T = _real_operator()
   config = RunConfig(
     source=SpectrumSource(nx=8, ny=8), nprocs=2,

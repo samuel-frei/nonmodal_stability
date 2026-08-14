@@ -69,8 +69,7 @@ def test_restart_roundtrip_writes_seven_field_blocks(tmp_path) -> None:
       assert f['OFT_idx_Version'][0] == 1
       assert f['t'][0] == float(idx)
 
-    # Dropped blocks stay zero; kept blocks carry the data at the phase that
-    # maximises its amplitude, since an eigenvector's phase is arbitrary.
+    # Dropped blocks stay zero; kept ones carry the amplitude-maximising phase.
     vec = eigvecs[:, idx]
     expected = np.real(vec * np.exp(-1j * aligned_phase(vec)))
     with h5py.File(path, 'r') as f:

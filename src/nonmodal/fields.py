@@ -67,8 +67,7 @@ def _write_restart(
   # Separate the global state vector into its field blocks.
   blocks = np.split(global_vec, FIELD_BLOCK_COUNT)
   path = f'{out_dir}/xmhd2d_{index:05d}.rst'
-  # `t` is the file index, not a physical time: that is what lets a directory of
-  # these be read back as a sequence.
+  # `t` carries the file index, so a directory reads back as a sequence.
   with h5py.File(path, 'w') as f:
     f.create_dataset('OFT_idx_Version', data=np.array([1], dtype=np.int32))
     f.create_dataset('t', data=np.array([float(index)], dtype=np.float64))
@@ -80,9 +79,7 @@ def _write_restart(
 
 def aligned_phase(vec: NDArray[np.complexfloating]) -> float:
   """The phase `theta` maximising `||Re(vec * exp(-i*theta))||`."""
-  # A complex mode's overall phase is arbitrary, so taking Re() directly can
-  # discard most of the amplitude. Maximising Re(v)cos(t) + Im(v)sin(t) gives
-  # tan(2t) = 2 a.b / (a.a - b.b).
+  # Maximising ||Re(v)cos(t) + Im(v)sin(t)|| gives tan(2t) = 2 a.b / (a.a - b.b).
   a = np.asarray(vec.real, dtype=np.float64)
   b = np.asarray(vec.imag, dtype=np.float64)
   return 0.5 * float(np.arctan2(2.0 * float(a @ b), float(a @ a) - float(b @ b)))
@@ -96,9 +93,7 @@ def write_restart_eigenvectors(
 ) -> list[str]:
   """Write reduced eigenvectors as restart files, one per eigenvector.
 
-  Phase-aligned like a pseudomode: an eigenvector's overall phase is arbitrary,
-  so taking `Re()` at whatever phase the solver returned can land near a node
-  of the mode and plot as noise.
+  Phase-aligned like a pseudomode; raw `Re()` can land on a node and plot as noise.
   """
   return write_restart_modes(eigvecs, keep_global, nr_local, out_dir, phases=1)
 
