@@ -45,7 +45,7 @@ from .matrices import HDF5Matrix, assemble_global  # noqa: E402
 from .operator import (  # noqa: E402
   DEFAULT_TIMESTEP,
   eigenvectors_from_schur,
-  load_or_compute_jacobian,
+  load_or_compute_generator,
   load_or_compute_schur,
   load_or_compute_schur_vectors,
   rightmost_indices,
@@ -100,7 +100,7 @@ __all__ = [
   'rightmost_indices',
   'spectrum_from_schur',
   'write_eigenmode_restarts',
-  'load_or_compute_jacobian',
+  'load_or_compute_generator',
   'load_or_compute_schur',
   'load_or_compute_schur_vectors',
   'load_samples',

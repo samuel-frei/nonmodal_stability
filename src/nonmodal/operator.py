@@ -1,11 +1,16 @@
-"""Build the reduced time-advance operator and its spectral factorisations.
+"""Build the reduced continuous-time generator and its spectral factorisations.
+
+OFT's backward-Euler Jacobian is exactly `J = M + dt*K`, so the generator of
+`du/dt = L u` is `L = M^-1 (M - J) / dt`, independent of `dt`. Its eigenvalues
+are physical growth rates in 1/s.
 
 Each stage caches to `.npy` and reuses it blindly. Caches are keyed by filename
-only, so they are NOT invalidated when inputs, the timestep or `KEPT_BLOCK_IDS`
-change -- delete them by hand.
+only, so they are NOT invalidated when inputs or `KEPT_BLOCK_IDS` change --
+delete them by hand.
 
-* `load_or_compute_jacobian` -- the reduced effective operator `A`.
-* `load_or_compute_schur` -- the triangular factor `T` of `A = Z T Z*`.
+* `generator_from_matrices` -- `L` from a reduced Jacobian and mass matrix.
+* `load_or_compute_generator` -- the reduced generator `L`, from the exports.
+* `load_or_compute_schur` -- the triangular factor `T` of `L = Z T Z*`.
 * `load_or_compute_schur_vectors` -- both `T` and the unitary `Z`.
 * `spectrum_from_schur` -- the eigenvalues, which are the diagonal of `T`.
 * `rightmost_indices` / `eigenvectors_from_schur` -- eigenvectors by
@@ -23,7 +28,7 @@ import scipy
 from numpy.typing import NDArray
 from scipy import sparse
 
-from .adapters import find_input_deck, read_adiabatic_index, read_resistivity
+from .adapters import find_input_deck, read_adiabatic_index, read_resistivity, read_timestep
 from .fields import (
   FIELD_BLOCK_COUNT,
   PSI_BLOCK_ID,
@@ -32,11 +37,14 @@ from .fields import (
 )
 from .matrices import HDF5Matrix, assemble_global
 
-REAL_JACOBIAN_CACHE = 'real_jacobian.npy'
-SCHUR_CACHE = 'full_reduced_schur.npy'
-#: The unitary Z of A = Z T Z*, needed to map a pseudomode back to the basis.
-SCHURVEC_CACHE = 'full_reduced_schurvecs.npy'
-SCHUR_PLOT = 'full_reduced_schur_eigs.png'
+GENERATOR_CACHE = 'generator.npy'
+SCHUR_CACHE = 'generator_schur.npy'
+#: The unitary Z of L = Z T Z*, needed to map a pseudomode back to the basis.
+SCHURVEC_CACHE = 'generator_schurvecs.npy'
+SCHUR_PLOT = 'generator_eigs.png'
+#: Caches of the old backward-Euler operator (J^-1 M - I)/dt. Never read: they
+#: hold a different operator, and caches are keyed by filename alone.
+LEGACY_CACHES = ('real_jacobian.npy', 'full_reduced_schur.npy', 'full_reduced_schurvecs.npy')
 DEFAULT_TIMESTEP = 1e-7
 DEFAULT_CACHE_DIR = '.'
 
@@ -114,23 +122,56 @@ def psi_mass_scale(
   return scale
 
 
-def load_or_compute_jacobian(
+def generator_from_matrices(
+  reduced_jac: Any,
+  reduced_mmat: Any,
+  timestep: float,
+) -> NDArray[np.float64]:
+  """The generator `L = M^-1 (M - J) / dt` of a backward-Euler Jacobian `J = M + dt*K`.
+
+  This is `-M^-1 K`, the continuous-time operator, and does not depend on `dt`.
+  `timestep` must be the one the Jacobian was exported with.
+  """
+  difference = sparse.csr_array(reduced_mmat - reduced_jac).toarray()
+  solved = sparse.linalg.spsolve(sparse.csc_array(reduced_mmat), difference)
+  return np.asarray(solved, dtype=np.float64) / timestep
+
+
+def check_timestep(timestep: float, deck_timestep: float, deck: str) -> None:
+  """Raise unless `timestep` is the `dt` the export was made with."""
+  if not np.isclose(timestep, deck_timestep, rtol=1e-12, atol=0.0):
+    raise ValueError(
+      f'--timestep {timestep:g} differs from dt={deck_timestep:g} in {deck}; the '
+      f'Jacobian is M + dt*K at the export dt, so any other value yields a wrong L')
+
+
+def _warn_legacy_caches(cache_dir: str) -> None:
+  """Say so when old-operator caches sit in the cache directory, unused."""
+  present = [name for name in LEGACY_CACHES if os.path.exists(os.path.join(cache_dir, name))]
+  if present:
+    print(f'ignoring {", ".join(present)} in {os.path.abspath(cache_dir)}: they hold '
+          f'the old operator (J^-1 M - I)/dt, not the generator L', flush=True)
+
+
+def load_or_compute_generator(
   jacobian_path: str,
   massmat_path: str,
   keep_global: NDArray[np.bool_],
   cache_dir: str = DEFAULT_CACHE_DIR,
   timestep: float = DEFAULT_TIMESTEP,
 ) -> NDArray[np.float64]:
-  """Load the cached reduced operator, or build and cache it from HDF5 matrices."""
-  cached = _load_cached(cache_dir, REAL_JACOBIAN_CACHE, 'reduced Jacobian')
+  """Load the cached reduced generator `L`, or build and cache it from HDF5 matrices."""
+  _warn_legacy_caches(cache_dir)
+  cached = _load_cached(cache_dir, GENERATOR_CACHE, 'reduced generator')
   if cached is not None:
     return cached
 
-  # gamma and eta define the operator, so they come from the deck that ran the export.
+  # gamma, eta and dt define the operator, so they come from the deck that ran the export.
   deck = find_input_deck(jacobian_path)
   gamma = read_adiabatic_index(deck)
   eta = read_resistivity(deck)
-  print(f'input deck {deck}: gamma={gamma:g}, eta={eta:g}', flush=True)
+  check_timestep(timestep, read_timestep(deck), deck)
+  print(f'input deck {deck}: gamma={gamma:g}, eta={eta:g}, dt={timestep:g}', flush=True)
   print(f'temperature mass block scaled by 1/(gamma-1), gamma={gamma:g}', flush=True)
 
   mmat = HDF5Matrix(massmat_path, '/massmat')
@@ -159,13 +200,11 @@ def load_or_compute_jacobian(
   print('Shape of reduced_Jac is:', reduced_jac.shape, flush=True)
   print('shape of reduced_Mmat is:', reduced_mmat.shape, flush=True)
 
-  solved = sparse.linalg.spsolve(reduced_jac, reduced_mmat.toarray())
-  solved = np.asarray(solved)
-  identity = np.eye(reduced_jac.shape[0], dtype=solved.dtype)
-  real_jac = (solved - identity) / timestep
+  generator = generator_from_matrices(reduced_jac, reduced_mmat, timestep)
+  del reduced_jac, reduced_mmat
 
-  _save_cached(cache_dir, REAL_JACOBIAN_CACHE, real_jac)
-  return real_jac
+  _save_cached(cache_dir, GENERATOR_CACHE, generator)
+  return generator
 
 
 def spectrum_from_schur(
@@ -253,12 +292,12 @@ def write_eigenmode_restarts(
 
 
 def _compute_schur(
-  real_jac: NDArray[np.float64],
+  generator: NDArray[np.float64],
   cache_dir: str,
 ) -> tuple[NDArray[np.complex128], NDArray[np.complex128]]:
-  """Factorise A = Z T Z*, caching both halves and plotting the diagonal."""
+  """Factorise L = Z T Z*, caching both halves and plotting the diagonal."""
   print('computing schur factorization', flush=True)
-  schur_raw, vectors_raw = scipy.linalg.schur(real_jac, output='complex')
+  schur_raw, vectors_raw = scipy.linalg.schur(generator, output='complex')
   schur_t = np.asarray(schur_raw, dtype=np.complex128)
   schur_z = np.asarray(vectors_raw, dtype=np.complex128)
 
@@ -276,7 +315,7 @@ def _compute_schur(
 
 
 def load_or_compute_schur(
-  real_jac: NDArray[np.float64],
+  generator: NDArray[np.float64],
   cache_dir: str = DEFAULT_CACHE_DIR,
 ) -> NDArray[np.complex128]:
   """Load the cached Schur factor T, or compute and persist it.
@@ -286,15 +325,15 @@ def load_or_compute_schur(
   cached = _load_cached(cache_dir, SCHUR_CACHE, 'Schur factor')
   if cached is not None:
     return np.asarray(cached, dtype=np.complex128)
-  schur_t, _ = _compute_schur(real_jac, cache_dir)
+  schur_t, _ = _compute_schur(generator, cache_dir)
   return schur_t
 
 
 def load_or_compute_schur_vectors(
-  real_jac: NDArray[np.float64],
+  generator: NDArray[np.float64],
   cache_dir: str = DEFAULT_CACHE_DIR,
 ) -> tuple[NDArray[np.complex128], NDArray[np.complex128]]:
-  """Load or compute both halves of A = Z T Z*."""
+  """Load or compute both halves of L = Z T Z*."""
   # Both halves must be cached to skip the factorisation; T alone redoes it.
   cached_t = _load_cached(cache_dir, SCHUR_CACHE, 'Schur factor')
   cached_z = _load_cached(cache_dir, SCHURVEC_CACHE, 'Schur vectors')
@@ -307,4 +346,4 @@ def load_or_compute_schur_vectors(
       f'{SCHUR_CACHE} is cached but {SCHURVEC_CACHE} is not; Z cannot be '
       f'recovered from T alone, so the factorisation is being redone. It will '
       f'be cached afterwards.', flush=True)
-  return _compute_schur(real_jac, cache_dir)
+  return _compute_schur(generator, cache_dir)

@@ -13,10 +13,16 @@ with `&xmhd_options`. Both carry the same keys.
 * `simulation_namelist` -- which simulation group a deck uses.
 * `read_adiabatic_index` -- `gamma`, which scales the temperature mass block.
 * `read_resistivity` -- `eta`, which can scale the psi mass block.
+* `read_timestep` -- `dt`, which the exported Jacobian is linear in.
+* `read_physical_scales` -- Alfven speed and time, Lundquist and magnetic
+  Prandtl numbers, in whichever units the deck's driver used.
 """
 
+import math
 import os
 import re
+from dataclasses import asdict, dataclass
+from typing import Any
 
 #: Deck filenames, newest driver first.
 INPUT_DECK_NAMES = ('oft.in', 'oft_surf.in')
@@ -24,6 +30,9 @@ INPUT_DECK_NAMES = ('oft.in', 'oft_surf.in')
 SIMULATION_NAMELISTS = ('harris_sheet_options', 'xmhd_options')
 #: Levels above the export to search; run directories sit under a case root.
 SEARCH_PARENTS = 3
+#: OFT's own constants (`mhd_utils.F90`), so derived scales match the solver.
+MU0 = math.pi * 4.0e-7
+PROTON_MASS = 1.672621777e-27
 
 
 def find_input_deck(start_path: str, parents: int = SEARCH_PARENTS) -> str:
@@ -105,8 +114,92 @@ def read_adiabatic_index(deck_path: str) -> float:
 
 
 def read_resistivity(deck_path: str) -> float:
-  """Read the scalar `eta` from an input deck, as a float."""
+  """Read the scalar `eta` from an input deck, as a float, in the deck's own units."""
   eta = _read_simulation_float(deck_path, 'eta')
   if eta <= 0.0:
     raise ValueError(f'eta must be positive for the 1/eta psi mass term, got {eta}')
   return eta
+
+
+def read_timestep(deck_path: str) -> float:
+  """Read `dt` [s] from an input deck."""
+  dt = _read_simulation_float(deck_path, 'dt')
+  if dt <= 0.0:
+    raise ValueError(f'dt must be positive, got {dt}')
+  return dt
+
+
+@dataclass(frozen=True)
+class PhysicalScales:
+  """Reference scales for quoting growth rates physically, all SI.
+
+  Lengths use the current-sheet half-width `lam_b`, density the sheet peak
+  `n0`, and field the asymptotic `B0 = psi0` of the Harris profile.
+  """
+
+  deck: str
+  unit_convention: str
+  reference_length_m: float
+  reference_density_m3: float
+  ion_mass_kg: float
+  field_T: float
+  magnetic_diffusivity_m2_s: float
+  kinematic_viscosity_m2_s: float
+  alfven_speed_m_s: float
+  alfven_time_s: float
+  lundquist_number: float
+  magnetic_prandtl_number: float
+
+  def describe(self) -> dict[str, Any]:
+    """A JSON-ready dictionary."""
+    return asdict(self)
+
+
+#: How each deck generation's driver reads `eta` and `nu`.
+UNIT_CONVENTIONS = {
+  'harris_sheet_options': 'eta is magnetic diffusivity [m^2/s]; nu is kinematic viscosity [m^2/s]',
+  'xmhd_options': 'eta is resistivity [Ohm m]; nu is dynamic viscosity [Pa s], taken at n0',
+}
+
+
+def read_physical_scales(deck_path: str) -> PhysicalScales:
+  """Alfven and dissipation scales of a Harris-sheet deck.
+
+  The two drivers read `eta` and `nu` in different units, so the deck's
+  group decides the conversion: the older linear driver divided its
+  resistivity by mu0 and its viscosity by the mass density in the equations;
+  upstream OFT takes both as diffusivities.
+  """
+  with open(deck_path, encoding='utf-8', errors='replace') as f:
+    text = f.read()
+  group = simulation_namelist(text)
+
+  def value(key: str) -> float:
+    number = float(read_namelist_value(text, group, key).lower().replace('d', 'e'))
+    if number <= 0.0:
+      raise ValueError(f'{key} must be positive to define physical scales, got {number}')
+    return number
+
+  field, length = value('psi0'), value('lam_b')
+  density, eta, nu = value('n0'), value('eta'), value('nu')
+  mass_density = PROTON_MASS * density
+  if group == 'xmhd_options':
+    diffusivity, viscosity = eta / MU0, nu / mass_density
+  else:
+    diffusivity, viscosity = eta, nu
+
+  alfven_speed = field / math.sqrt(MU0 * mass_density)
+  return PhysicalScales(
+    deck=os.path.abspath(deck_path),
+    unit_convention=UNIT_CONVENTIONS[group],
+    reference_length_m=length,
+    reference_density_m3=density,
+    ion_mass_kg=PROTON_MASS,
+    field_T=field,
+    magnetic_diffusivity_m2_s=diffusivity,
+    kinematic_viscosity_m2_s=viscosity,
+    alfven_speed_m_s=alfven_speed,
+    alfven_time_s=length / alfven_speed,
+    lundquist_number=length * alfven_speed / diffusivity,
+    magnetic_prandtl_number=viscosity / diffusivity,
+  )

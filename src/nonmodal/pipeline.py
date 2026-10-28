@@ -6,10 +6,12 @@
 """
 
 import os
+from typing import Any
 
 import numpy as np
 from numpy.typing import NDArray
 
+from .adapters import find_input_deck, read_physical_scales
 from .config import PlotConfig, PseudomodeConfig, RunConfig
 from .fields import build_reduction_mapping, write_restart_modes
 from .io import (
@@ -21,7 +23,7 @@ from .io import (
   write_pseudomodes,
 )
 from .operator import (
-  load_or_compute_jacobian,
+  load_or_compute_generator,
   load_or_compute_schur_vectors,
   spectrum_from_schur,
   write_eigenmode_restarts,
@@ -96,15 +98,15 @@ def run_pipeline(config: RunConfig) -> None:
   os.makedirs(config.output_dir, exist_ok=True)
   os.makedirs(config.cache_dir, exist_ok=True)
 
-  real_jac = load_or_compute_jacobian(
+  generator = load_or_compute_generator(
     config.jacobian, config.massmat, keep_global, config.cache_dir, config.timestep)
   # A real operator's spectrum is conjugate-symmetric, so half the plane serves.
-  real_operator = bool(np.isrealobj(real_jac))
+  real_operator = bool(np.isrealobj(generator))
   half_plane = real_operator and not config.force_full_plane
 
   # One factorisation serves all three: spectrum, eigenvectors, and sampling.
-  schur_t, schur_z = load_or_compute_schur_vectors(real_jac, config.cache_dir)
-  del real_jac
+  schur_t, schur_z = load_or_compute_schur_vectors(generator, config.cache_dir)
+  del generator
   eigvals = spectrum_from_schur(schur_t)
   _write_eigenmode_sidecar(config, *write_eigenmode_restarts(
     schur_t, schur_z, keep_global, nr_local, config.output_dir,
@@ -129,7 +131,16 @@ def run_pipeline(config: RunConfig) -> None:
     n_points=int(points.size),
     n_evaluated=n_evaluated,
     half_plane=half_plane,
-    effective_workers=_worker_count(n_evaluated, config.nprocs)))
+    effective_workers=_worker_count(n_evaluated, config.nprocs),
+    physical_scales=_physical_scales(config.jacobian)))
+
+
+def _physical_scales(jacobian_path: str) -> dict[str, Any]:
+  """The deck's reference scales, logged and returned for a metadata sidecar."""
+  scales = read_physical_scales(find_input_deck(jacobian_path))
+  print(f'tau_A = {scales.alfven_time_s:.4g} s, S = {scales.lundquist_number:.4g}, '
+        f'Pm = {scales.magnetic_prandtl_number:.4g} ({scales.unit_convention})', flush=True)
+  return scales.describe()
 
 
 def pseudomode_run(config: PseudomodeConfig) -> list[str]:
@@ -137,10 +148,10 @@ def pseudomode_run(config: PseudomodeConfig) -> list[str]:
   nr_local, keep_global = build_reduction_mapping(config.jacobian)
   os.makedirs(config.output_dir, exist_ok=True)
 
-  real_jac = load_or_compute_jacobian(
+  generator = load_or_compute_generator(
     config.jacobian, config.massmat, keep_global, config.cache_dir, config.timestep)
-  schur_t, schur_z = load_or_compute_schur_vectors(real_jac, config.cache_dir)
-  del real_jac
+  schur_t, schur_z = load_or_compute_schur_vectors(generator, config.cache_dir)
+  del generator
 
   modes = [pseudomode_at(schur_t, schur_z, z, config.tol) for z in config.points]
   del schur_t, schur_z
@@ -158,6 +169,7 @@ def pseudomode_run(config: PseudomodeConfig) -> list[str]:
     'tol': float(config.tol),
     'modes': [m.describe() for m in modes],
     'files': [os.path.relpath(p, config.output_dir) for p in paths],
+    'physical_scales': _physical_scales(config.jacobian),
   })
   return paths
 

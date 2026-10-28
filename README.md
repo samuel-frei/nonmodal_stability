@@ -3,8 +3,9 @@
 Nonmodal (pseudospectral) stability analysis of reduced linear MHD operators.
 
 Given exported Jacobian and mass matrices, `nonmodal` reduces the global system
-to a subset of physical fields, builds the Schur form of the resulting
-time-advance operator, and samples the resolvent norm
+to a subset of physical fields, builds the Schur form of the continuous-time
+generator `L` of `du/dt = L u` (eigenvalues are growth rates in 1/s), and samples
+the resolvent norm
 
 $$\sigma_{\min}(zI - T)$$
 
@@ -178,29 +179,30 @@ vector rather than ARPACK's random one.
 
 ## Caching — read this before trusting a result
 
-Five expensive intermediates are cached under `--cache-dir` (default `.`):
+Three expensive intermediates are cached under `--cache-dir` (default `.`):
 
 ```
-real_jacobian.npy       full_reduced_eigvals.npy
-full_reduced_schur.npy  full_reduced_eigvecs.npy
-full_reduced_schurvecs.npy
+generator.npy  generator_schur.npy  generator_schurvecs.npy
 ```
 
-`full_reduced_schurvecs.npy` holds the unitary `Z` of `A = Z T Z*`. Sampling never needs
-it, but pseudomodes do, and `Z` cannot be recovered from a cached `T` — so a run whose
-Schur factor predates this file has to redo the factorisation once. It says so before
+`generator_schurvecs.npy` holds the unitary `Z` of `L = Z T Z*`. Sampling never needs
+it, but eigenvectors and pseudomodes do, and `Z` cannot be recovered from a cached `T` —
+so a cache holding only `T` has to redo the factorisation once. It says so before
 starting.
 
 **Caches are keyed by filename alone.** They are *not* invalidated when the
-input matrices, `DEFAULT_TIMESTEP`, or `KEPT_BLOCK_IDS` change. Changing any of
-those while stale caches are present will silently produce results for the
-*previous* problem.
+input matrices or `KEPT_BLOCK_IDS` change. Changing either while stale caches are
+present will silently produce results for the *previous* problem.
 
 Delete them by hand after any such change:
 
 ```bash
-rm -f real_jacobian.npy full_reduced_*.npy
+rm -f generator*.npy
 ```
+
+Older runs left `real_jacobian.npy` and `full_reduced_*.npy`. Those hold the
+backward-Euler operator `(J^-1 M - I)/dt`, not `L`, and are never read; the run log
+says so when it finds them.
 
 Every cache hit logs its absolute path and mtime so you can spot a stale reuse
 in the run log.
@@ -234,12 +236,12 @@ R, C, sigmin = compute_pseudospectrum(
 `Bounds.around_spectrum(eigvals, pad=0.3)` builds the same region `run` uses.
 
 A pseudomode needs both halves of the Schur factorisation, since `sigma_min` is
-invariant under `A = Z T Z*` but its singular vectors are not:
+invariant under `L = Z T Z*` but its singular vectors are not:
 
 ```python
 from nonmodal import load_or_compute_schur_vectors, pseudomode_at
 
-schur_t, schur_z = load_or_compute_schur_vectors(real_jac, cache_dir='.')
+schur_t, schur_z = load_or_compute_schur_vectors(generator, cache_dir='.')
 mode = pseudomode_at(schur_t, schur_z, 5e5 - 2.4e4j)
 print(mode.sigma_min, mode.residual)   # equal, and that is what identifies it
 ```

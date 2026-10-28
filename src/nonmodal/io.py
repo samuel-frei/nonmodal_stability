@@ -29,6 +29,10 @@ EIGVALS_FILE = 'pseudo_eigvals.npy'
 METADATA_FILE = 'run_metadata.json'
 PSEUDOMODE_FILE = 'pseudomodes.json'
 EIGENMODE_FILE = 'eigenmodes.json'
+#: What the sampled operator is; eigenvalues and z are growth rates in 1/s.
+OPERATOR_DESCRIPTION = (
+  'generator L = M^-1 (M - J)/dt of du/dt = L u; eigenvalues and sample points '
+  'are in 1/s (multiply by physical_scales.alfven_time_s for gamma*tau_A)')
 
 
 def build_metadata(
@@ -38,8 +42,13 @@ def build_metadata(
   n_evaluated: int,
   half_plane: bool,
   effective_workers: int,
+  physical_scales: dict[str, Any],
 ) -> dict[str, Any]:
-  """Describe one run, for reproducibility and traceability."""
+  """Describe one run, for reproducibility and traceability.
+
+  Plots in different units look alike, so the operator and the scales that
+  turn its eigenvalues into normalised growth rates are recorded here.
+  """
   return {
     'created_utc': datetime.now(UTC).isoformat(timespec='seconds').replace('+00:00', 'Z'),
     'hostname': socket.gethostname(),
@@ -62,6 +71,8 @@ def build_metadata(
     },
     'nprocs_requested': int(config.nprocs),
     'nprocs_effective': int(effective_workers),
+    'operator': OPERATOR_DESCRIPTION,
+    'physical_scales': physical_scales,
   }
 
 

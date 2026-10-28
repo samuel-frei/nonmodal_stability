@@ -75,8 +75,9 @@ def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
                   help='HDF5 file holding the /massmat matrix.')
   op.add_argument('--timestep', type=float, default=None,
                   help='Timestep of the implicit solve that produced the '
-                       'Jacobian. It defines the effective operator, so it must '
-                       'match the simulation that exported it.')
+                       'Jacobian. Only used to recover the generator L from '
+                       'J = M + dt*K; it must equal dt in the input deck, and '
+                       'any other value is rejected.')
   op.add_argument('--n-eigvecs', type=int, default=None,
                   help='How many eigenvectors to compute and write as restart '
                        'files.')
@@ -89,8 +90,8 @@ def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
   out.add_argument('--cache-dir', type=str, default='.',
                    help='Directory for the reduced-operator, eigenvalue and Schur '
                         'caches. Caches are reused by filename alone and are NOT '
-                        'invalidated when inputs or --timestep change; delete them '
-                        'by hand after changing either.')
+                        'invalidated when inputs change; delete them '
+                        'by hand.')
   out.add_argument('--output-dir', type=str, default='pseudospectrum',
                    help='Output directory for samples and metadata.')
   out.add_argument('--run-tag', type=str, default='',
@@ -136,7 +137,10 @@ def _add_pseudomode_arguments(parser: argparse.ArgumentParser) -> None:
   op.add_argument('--massmat', type=str, default='./mass_mat.h5',
                   help='HDF5 file holding the /massmat matrix.')
   op.add_argument('--timestep', type=float, default=None,
-                  help='Timestep of the implicit solve that produced the Jacobian.')
+                  help='Timestep of the implicit solve that produced the '
+                       'Jacobian. Only used to recover the generator L from '
+                       'J = M + dt*K; it must equal dt in the input deck, and '
+                       'any other value is rejected.')
   op.add_argument('--cache-dir', type=str, default='.',
                   help='Directory holding the operator and Schur caches. A run '
                        'whose Schur factor predates the vector cache has to redo '

@@ -60,7 +60,8 @@ def test_metadata_round_trip(tmp_path) -> None:
   config = RunConfig(source=SpectrumSource(nx=4, ny=4), run_tag='r', case_tag='c')
   metadata = build_metadata(
     config, Bounds(-1.0, 1.0, -2.0, 2.0),
-    n_points=16, n_evaluated=9, half_plane=True, effective_workers=4)
+    n_points=16, n_evaluated=9, half_plane=True, effective_workers=4,
+    physical_scales={'alfven_time_s': 3.1e-6})
 
   write_metadata(str(tmp_path), metadata)
   got = read_metadata(str(tmp_path))
@@ -76,7 +77,8 @@ def test_metadata_is_json_serialisable_as_written(tmp_path) -> None:
   config = RunConfig(source=SpectrumSource(nx=4, ny=4))
   metadata = build_metadata(
     config, Bounds.around_points(_samples()[0]),
-    n_points=3, n_evaluated=3, half_plane=False, effective_workers=1)
+    n_points=3, n_evaluated=3, half_plane=False, effective_workers=1,
+    physical_scales={'alfven_time_s': 3.1e-6})
 
   write_metadata(str(tmp_path), metadata)
   assert json.loads((tmp_path / 'run_metadata.json').read_text()) == metadata

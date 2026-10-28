@@ -5,10 +5,14 @@ import pytest
 from scipy import sparse
 
 from nonmodal.adapters import (
+  MU0,
+  PROTON_MASS,
   find_input_deck,
   read_adiabatic_index,
   read_namelist_value,
+  read_physical_scales,
   read_resistivity,
+  read_timestep,
   simulation_namelist,
 )
 from nonmodal.fields import FIELD_BLOCK_COUNT, PSI_BLOCK_ID, TEMPERATURE_BLOCK_ID
@@ -196,3 +200,51 @@ def test_a_deck_eta_that_disagrees_with_the_export_raises() -> None:
   jac, bc, mass = _local_export(1.0 / ETA)
   with pytest.raises(ValueError, match='near neither'):
     psi_mass_scale(jac, bc, mass, ETA * 10)
+
+
+def _scales_deck(group: str, eta: float, nu: float) -> str:
+  return f"""&{group}
+  n0=5.196374E16
+  psi0=0.002045692328575E0,
+  eta={eta!r}
+  nu={nu!r}
+  gamma=1.67
+  dt=1.E-7
+  lam_b = 0.6075E0
+/
+"""
+
+
+def test_both_unit_conventions_give_the_same_physical_scales(tmp_path) -> None:
+  """The old driver's Ohm m and Pa s are the new driver's m^2/s, converted."""
+  diffusivity, viscosity = 742.6, 7424.2
+  mass_density = PROTON_MASS * 5.196374e16
+  new = _write(tmp_path, _scales_deck('harris_sheet_options', diffusivity, viscosity), 'oft.in')
+  old_dir = tmp_path / 'old'
+  old_dir.mkdir()
+  old = _write(old_dir, _scales_deck('xmhd_options', diffusivity * MU0, viscosity * mass_density),
+               'oft_surf.in')
+
+  a, b = read_physical_scales(new), read_physical_scales(old)
+  for field in ('magnetic_diffusivity_m2_s', 'kinematic_viscosity_m2_s', 'alfven_time_s',
+                'lundquist_number', 'magnetic_prandtl_number'):
+    assert getattr(a, field) == pytest.approx(getattr(b, field), rel=1e-12)
+  assert a.unit_convention != b.unit_convention
+
+
+def test_physical_scales_match_the_closed_form(tmp_path) -> None:
+  scales = read_physical_scales(
+    _write(tmp_path, _scales_deck('harris_sheet_options', 742.6, 7424.2)))
+  v_a = 0.002045692328575 / np.sqrt(MU0 * PROTON_MASS * 5.196374e16)
+
+  assert scales.alfven_speed_m_s == pytest.approx(v_a, rel=1e-12)
+  assert scales.alfven_time_s == pytest.approx(0.6075 / v_a, rel=1e-12)
+  assert scales.lundquist_number == pytest.approx(0.6075 * v_a / 742.6, rel=1e-12)
+  assert scales.magnetic_prandtl_number == pytest.approx(7424.2 / 742.6, rel=1e-12)
+  # The 20x6z case: tau_A of a few microseconds, S ~ 160, Pm ~ 10.
+  assert 3.0e-6 < scales.alfven_time_s < 3.2e-6
+  assert 150 < scales.lundquist_number < 170
+
+
+def test_timestep_is_read_from_the_deck(tmp_path) -> None:
+  assert read_timestep(_write(tmp_path)) == pytest.approx(1e-7)
