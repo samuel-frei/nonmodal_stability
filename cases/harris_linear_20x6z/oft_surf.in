@@ -34,17 +34,17 @@
   chi=2943.4,
   eta=9.3317868E-4
   nu=6.45427171e-7
-  delta = 1.E-1
+  delta = 1.E-3
   gamma=1.67
   D_diff=1.E1
   den_scale = 5.196374E16
   dt=1.E-7
-  lam_b = 0.60625E0
-  lam_n = 0.60625E0
+  lam_b = 0.6075E0
+  lam_n = 0.6075E0
   L_x = 6.4E0
   L_z = 3.2E0
-  nsteps=120
-  rst_freq=1
+  nsteps=2000
+  rst_freq=10
   use_mfnk=F
   pm=F
   plot_run=F
@@ -52,5 +52,5 @@
 
 &xmhd_plot_options
   rst_start=0
-  rst_end=39
+  rst_end=4000
 /
