@@ -76,8 +76,9 @@ structured/unstructured branching it used to carry.
    The exported `/massmat` is the **scalar** Lagrange mass matrix (`nrg` = 2220,
    one field block) which `mass_blocks` replicates across the seven fields —
    scaling the temperature block by `1/(gamma-1)`, exactly as `mfun_apply` in
-   OFT's `xmhd_2d.F90` does. `gamma` is read from the `oft_surf.in` beside the
-   export; nothing else in the deck reaches the operator.
+   OFT's `xmhd_2d.F90` does, and the psi block by `1/eta` for exports from
+   upstream OFT (see the psi landmine). `gamma` and `eta` are read from the deck
+   beside the export; nothing else in the deck reaches the operator.
 2. **Factorise** — one complex Schur factorisation `A = Z T Z*` serves everything
    downstream. The spectrum *is* `diag(T)`, so there is no separate `eigvals` call;
    the 40 rightmost eigenvectors come out of the same `T` by back-substitution
@@ -97,7 +98,7 @@ no caches, which is why `run` also saves `pseudo_eigvals.npy` for the overlay.
 
 | Module | Responsibility |
 |---|---|
-| `adapters.py` | OFT-format interop: `oft_surf.in` namelist, `gamma` |
+| `adapters.py` | OFT-format interop: the input deck (`oft.in` / `oft_surf.in`), `gamma`, `eta` |
 | `matrices.py` | `HDF5Matrix`, `assemble_global` (numba) |
 | `fields.py` | 7-field block layout, reduction mask, restart output |
 | `operator.py` | reduced operator, Schur factor, eigenvalues and eigenvectors from it, caching |
@@ -122,8 +123,8 @@ since that is how they get verified.
 OpenFUSIONToolkit interop, which is what `adapters.py` now is, so that a local module
 never sits confusingly beside the real package. This is why the HDF5 reader is
 `HDF5Matrix` and the block layout lives in `fields.py` rather than a vendor-named
-module. `adapters.py` reads OFT's own file formats, so `oft_surf.in` appears there as
-a filename — but its functions are still named for what they do, not for the vendor.
+module. `adapters.py` reads OFT's own file formats, so `oft.in` and `oft_surf.in`
+appear there as filenames — but its functions are still named for what they do, not for the vendor.
 
 ## Landmines
 
@@ -134,12 +135,24 @@ a filename — but its functions are still named for what they do, not for the v
   filename alone and will be reused blindly — **delete them by hand** before
   rerunning. Any result derived from them, including the Apr 2026 production plots,
   predates the fix.
-- **`gamma` comes from the data, not a flag.** `load_or_compute_jacobian` finds
-  `oft_surf.in` beside the Jacobian, walking up to three parents (run directories
+- **`gamma` and `eta` come from the data, not flags.** `load_or_compute_jacobian`
+  finds the deck beside the Jacobian, walking up to three parents (run directories
   sit under a case root that holds the canonical deck; `margin_finding/` and
-  `pseudo_marginal/` rely on this). A missing deck raises rather than assuming a
-  value, because a wrong `gamma` silently yields a wrong operator. There is
-  deliberately no `--gamma`: it is a property of the export, like the mesh.
+  `pseudo_marginal/` rely on this). Two deck generations exist: upstream's Harris
+  driver reads `oft.in` with `&harris_sheet_options`; the older linear driver read
+  `oft_surf.in` with `&xmhd_options`. Either is accepted, but both names at one
+  level, both groups in one deck, or no deck at all raises rather than guessing,
+  because a wrong value silently yields a wrong operator. There is deliberately no
+  `--gamma` or `--eta`: they are properties of the export, like the mesh.
+- **The psi mass scale is read off the Jacobian, not the deck.** Upstream OFT
+  (commit `5da9985`, 2026-08-31) divides the psi rows of both `mfun_apply` and the
+  Jacobian by `eta(2)`; older builds, including every Apr 2026 export, do not. The
+  mass block must match or psi dynamics are wrong by a factor `eta` per step.
+  `psi_mass_scale` projects the Jacobian's psi-psi block onto the mass matrix:
+  that ratio is ~1 for old exports and ~`1/eta` (~1070 here) for new ones, and
+  anything near neither raises. The deck name cannot decide this: a fork build
+  from Aug 2026 already read `&harris_sheet_options` with the unscaled code. A
+  scalar `eta` is only valid for a single-region mesh; OFT stores it per region.
 - **Thread pinning must stay at the top of `__init__.py`**, above every import.
   `os.environ.setdefault` for `OMP/MKL/OPENBLAS_NUM_THREADS` only takes effect before
   NumPy is first imported. Moving or reordering it silently degrades many-core runs

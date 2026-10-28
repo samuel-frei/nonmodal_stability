@@ -23,8 +23,13 @@ import scipy
 from numpy.typing import NDArray
 from scipy import sparse
 
-from .adapters import find_input_deck, read_adiabatic_index
-from .fields import FIELD_BLOCK_COUNT, TEMPERATURE_BLOCK_ID, write_restart_eigenvectors
+from .adapters import find_input_deck, read_adiabatic_index, read_resistivity
+from .fields import (
+  FIELD_BLOCK_COUNT,
+  PSI_BLOCK_ID,
+  TEMPERATURE_BLOCK_ID,
+  write_restart_eigenvectors,
+)
 from .matrices import HDF5Matrix, assemble_global
 
 REAL_JACOBIAN_CACHE = 'real_jacobian.npy'
@@ -59,16 +64,54 @@ def _save_cached(cache_dir: str, filename: str, array: NDArray[Any]) -> None:
   np.save(os.path.join(cache_dir, filename), array)
 
 
-def mass_blocks(scalar_mass: Any, gamma: float) -> list[Any]:
+def mass_blocks(scalar_mass: Any, gamma: float, psi_scale: float) -> list[Any]:
   """The seven field blocks of the global mass matrix, given the scalar one.
 
-  Only temperature differs: its evolution carries a factor `1/(gamma - 1)`.
+  Temperature carries `1/(gamma - 1)` and psi carries `psi_scale`; the rest
+  carry 1. These match the row scalings of OFT's own mass function.
   """
   # The export is the scalar Lagrange mass matrix, so no per-field factor can
-  # be present in it; OFT applies this one when it assembles its own operator.
+  # be present in it; OFT applies these when it assembles its own operator.
   blocks = [scalar_mass] * FIELD_BLOCK_COUNT
   blocks[TEMPERATURE_BLOCK_ID] = scalar_mass / (gamma - 1.0)
+  blocks[PSI_BLOCK_ID] = scalar_mass * psi_scale
   return blocks
+
+
+#: How far the measured psi ratio may sit from a candidate scale, as a factor.
+PSI_SCALE_TOLERANCE = 1.5
+
+
+def psi_mass_scale(
+  local_jacobian: Any,
+  bc_flags: NDArray[np.bool_],
+  scalar_mass: Any,
+  eta: float,
+) -> float:
+  """The psi mass scale an export needs: 1, or 1/eta for upstream OFT.
+
+  Upstream OFT (commit 5da9985) divides the psi rows of both its mass function
+  and its Jacobian by eta; older builds do not. The Jacobian therefore records
+  which build made it: its psi-psi block is the mass matrix times that scale,
+  plus a small timestep-weighted term. The ratio is measured on interior rows
+  of the local matrices and must land near one candidate, or this raises.
+  """
+  nb = scalar_mass.shape[0]
+  rows = slice(PSI_BLOCK_ID * nb, (PSI_BLOCK_ID + 1) * nb)
+  interior = ~np.asarray(bc_flags[rows], dtype=bool)
+  jac_psi = sparse.csr_array(local_jacobian)[rows, rows][interior]
+  mass = sparse.csr_array(scalar_mass)[interior]
+  ratio = float(jac_psi.multiply(mass).sum() / mass.multiply(mass).sum())
+
+  candidates = {'unscaled (pre-5da9985 OFT)': 1.0, 'scaled by 1/eta (upstream OFT)': 1.0 / eta}
+  label, scale = min(candidates.items(), key=lambda item: abs(np.log(ratio / item[1])))
+  if not (ratio > 0 and abs(np.log(ratio / scale)) <= np.log(PSI_SCALE_TOLERANCE)):
+    raise ValueError(
+      f'psi rows of the Jacobian are {ratio:.4g} x the mass matrix, near neither '
+      f'1 nor 1/eta = {1.0 / eta:.4g}; the export and deck do not match')
+  print(f'psi mass block {label}: Jacobian/mass ratio {ratio:.4g}, '
+        f'scale {scale:.6g}', flush=True)
+  return scale
 
 
 def load_or_compute_jacobian(
@@ -83,14 +126,18 @@ def load_or_compute_jacobian(
   if cached is not None:
     return cached
 
-  # gamma defines the operator, so it comes from the deck that ran the export.
-  gamma = read_adiabatic_index(find_input_deck(jacobian_path))
+  # gamma and eta define the operator, so they come from the deck that ran the export.
+  deck = find_input_deck(jacobian_path)
+  gamma = read_adiabatic_index(deck)
+  eta = read_resistivity(deck)
+  print(f'input deck {deck}: gamma={gamma:g}, eta={eta:g}', flush=True)
   print(f'temperature mass block scaled by 1/(gamma-1), gamma={gamma:g}', flush=True)
 
   mmat = HDF5Matrix(massmat_path, '/massmat')
   jac = HDF5Matrix(jacobian_path, '/jacobian')
+  psi_scale = psi_mass_scale(jac.csr_rep, jac.bc_flags, mmat.csr_rep, eta)
 
-  mmat_big = sparse.block_diag(mass_blocks(mmat.csr_rep, gamma), format='csr')
+  mmat_big = sparse.block_diag(mass_blocks(mmat.csr_rep, gamma, psi_scale), format='csr')
   del mmat
 
   jac_dense = assemble_global(jac.csr_rep.toarray(), nrg=jac.nrg, ncg=jac.ncg, lg=jac.lg)
