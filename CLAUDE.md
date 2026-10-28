@@ -34,17 +34,19 @@ so `git log --follow` traces the original script through the moves.
 
 Two stale copies exist outside this repo and are **not** authoritative:
 
-- `research/recon_data/scripts/lin_ops_full_reduction.py` — equals upstream commit
+- `research/nonmodal_archive/recon_data/scripts/lin_ops_full_reduction.py` — equals upstream commit
   `0d0ae3a`, three commits behind, and still contains adaptive-grid code that upstream
   deliberately deleted in `304ff7f` ("remove naive mesh refinement").
-- `research/recon_data/psc_data/scripts/lin_ops_full_reduction.py` — was *ahead* of
+- `research/nonmodal_archive/recon_data/psc_data/scripts/lin_ops_full_reduction.py` — was *ahead* of
   upstream; its external-grid work has since been merged here (commit `ef52242`).
 
 This repo is ground truth. Do not treat those copies as a compatibility constraint.
 
 ## Where the real data lives
 
-Nothing in this repo; the exports sit under `research/recon_data/psc_data/`.
+Nothing in this repo; the exports sit on feynman under
+`/mnt/homes_global/swf2112/research/nonmodal_archive/recon_data/psc_data/` (archived
+Oct 2026; old sbatch scripts in there still use the pre-archive absolute paths).
 
 - `harris_linear_20x6z/{pseudo_marginal,pseudo_hires,pseudo_hhres,pseudo_hhhres,
   margin_finding}/` — the production runs, Apr 2026. Reduced operator is
