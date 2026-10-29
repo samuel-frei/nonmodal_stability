@@ -3,13 +3,16 @@
 import pytest
 
 from nonmodal.cli import (
+  kreiss_config_from_args,
   parse_args,
   plot_config_from_args,
   pseudomode_config_from_args,
   run_config_from_args,
 )
-from nonmodal.config import PlotConfig, PseudomodeConfig, RunConfig
+from nonmodal.config import KreissConfig, PlotConfig, PseudomodeConfig, RunConfig
+from nonmodal.kreiss import DEFAULT_AXIS_POINTS, DEFAULT_OFFAXIS_X, DEFAULT_OFFAXIS_Y
 from nonmodal.pseudospectrum import DEFAULT_MODE_TOL
+from nonmodal.resolution import DEFAULT_RESOLUTION_CUTOFF
 from nonmodal.sampling import (
   DEFAULT_GRID_NX,
   DEFAULT_GRID_NY,
@@ -220,3 +223,87 @@ def test_pseudomode_output_flags_reach_the_config() -> None:
   assert (config.jacobian, config.massmat) == ('j.h5', 'm.h5')
   assert config.timestep == pytest.approx(2e-7)
   assert (config.run_tag, config.case_tag) == ('r', 'c')
+
+
+def _kreiss(*extra: str) -> KreissConfig:
+  return kreiss_config_from_args(parse_args(['kreiss', *extra]))
+
+
+def test_kreiss_defaults_are_fully_resolved() -> None:
+  config = _kreiss()
+  assert isinstance(config, KreissConfig)
+  assert config.axis_points == DEFAULT_AXIS_POINTS
+  assert (config.offaxis_x, config.offaxis_y) == (DEFAULT_OFFAXIS_X, DEFAULT_OFFAXIS_Y)
+  assert config.tol == pytest.approx(DEFAULT_MODE_TOL)
+  assert all(getattr(config, f) is not None for f in config.__dataclass_fields__)
+
+
+def test_every_kreiss_flag_reaches_its_field() -> None:
+  config = _kreiss(
+    '--axis-points', '32', '--offaxis-x', '10', '--offaxis-y', '6', '--kreiss-tol', '1e-9',
+    '--nprocs', '8', '--jacobian', 'j.h5', '--massmat', 'm.h5', '--timestep', '2e-7',
+    '--cache-dir', 'cache', '--output-dir', 'out', '--run-tag', 'r', '--case-tag', 'c')
+  assert (config.axis_points, config.offaxis_x, config.offaxis_y) == (32, 10, 6)
+  assert config.tol == pytest.approx(1e-9)
+  assert config.nprocs == 8
+  assert (config.jacobian, config.massmat) == ('j.h5', 'm.h5')
+  assert config.timestep == pytest.approx(2e-7)
+  assert (config.cache_dir, config.output_dir) == ('cache', 'out')
+  assert (config.run_tag, config.case_tag) == ('r', 'c')
+
+
+@pytest.mark.parametrize(
+  ('flags', 'message'),
+  [
+    (['--axis-points', '2'], 'axis-points must be >= 3'),
+    (['--offaxis-y', '1'], 'offaxis-x and offaxis-y must be >= 2'),
+    (['--nprocs', '0'], 'nprocs must be >= 1'),
+    (['--kreiss-tol', '0'], 'kreiss-tol must be positive'),
+  ],
+)
+def test_kreiss_rejects_out_of_range_values(flags: list[str], message: str) -> None:
+  with pytest.raises(ValueError, match=message):
+    _kreiss(*flags)
+
+
+# --- subspace restriction ---------------------------------------------------
+
+
+_COMPUTE = {
+  'run': (_run, ()),
+  'pseudomode': (lambda *a: pseudomode_config_from_args(parse_args(['pseudomode', *a])),
+                 ('--at', '1+1j')),
+  'kreiss': (_kreiss, ()),
+}
+
+
+@pytest.mark.parametrize('command', sorted(_COMPUTE))
+def test_by_default_only_resolved_modes_are_analysed(command: str) -> None:
+  build, base = _COMPUTE[command]
+  config = build(*base)
+  assert config.stiffmat == './stiff_mat.h5'
+  assert config.resolution_cutoff == pytest.approx(DEFAULT_RESOLUTION_CUTOFF)
+  assert config.all_modes is False
+
+
+@pytest.mark.parametrize('command', sorted(_COMPUTE))
+def test_subspace_flags_reach_every_compute_config(command: str) -> None:
+  build, base = _COMPUTE[command]
+  config = build(*base, '--stiffmat', 'k.h5', '--resolution-cutoff', '0.05')
+  assert config.stiffmat == 'k.h5'
+  assert config.resolution_cutoff == pytest.approx(0.05)
+  assert build(*base, '--all-modes').all_modes is True
+
+
+@pytest.mark.parametrize('command', sorted(_COMPUTE))
+@pytest.mark.parametrize('flag', [('--stiffmat', 'k.h5'), ('--resolution-cutoff', '0.2')])
+def test_restriction_flags_are_rejected_with_all_modes(command: str, flag: tuple[str, str]) -> None:
+  build, base = _COMPUTE[command]
+  with pytest.raises(ValueError, match=f'--all-modes.*{flag[0]}'):
+    build(*base, '--all-modes', *flag)
+
+
+@pytest.mark.parametrize('cutoff', ['0', '1.5', '-0.1'])
+def test_resolution_cutoff_must_be_a_fraction(cutoff: str) -> None:
+  with pytest.raises(ValueError, match=r'resolution-cutoff must be in \(0, 1\]'):
+    _kreiss('--resolution-cutoff', cutoff)

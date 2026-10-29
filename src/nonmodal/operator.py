@@ -4,13 +4,16 @@ OFT's backward-Euler Jacobian is exactly `J = M + dt*K`, so the generator of
 `du/dt = L u` is `L = M^-1 (M - J) / dt`, independent of `dt`. Its eigenvalues
 are physical growth rates in 1/s.
 
-Each stage caches to `.npy` and reuses it blindly. Caches are keyed by filename
+Each stage caches to `.npy` and reuses it blindly. The Schur caches of a
+weighted norm carry its tag (`generator_schur_l2s.npy`); `generator.npy`
+holds `L` itself and is shared by every norm. Caches are keyed by filename
 only, so they are NOT invalidated when inputs or `KEPT_BLOCK_IDS` change --
 delete them by hand.
 
 * `generator_from_matrices` -- `L` from a reduced Jacobian and mass matrix.
 * `load_or_compute_generator` -- the reduced generator `L`, from the exports.
-* `load_or_compute_schur` -- the triangular factor `T` of `L = Z T Z*`.
+* `load_or_compute_schur` -- the triangular factor `T` of `L = Z T Z*`, or
+  of `B = R L R^-1` in a weighted norm (see `norm.py`).
 * `load_or_compute_schur_vectors` -- both `T` and the unitary `Z`.
 * `spectrum_from_schur` -- the eigenvalues, which are the diagonal of `T`.
 * `rightmost_indices` / `eigenvectors_from_schur` -- eigenvectors by
@@ -35,7 +38,8 @@ from .fields import (
   TEMPERATURE_BLOCK_ID,
   write_restart_eigenvectors,
 )
-from .matrices import HDF5Matrix, assemble_global
+from .matrices import HDF5Matrix, assemble_reduced
+from .norm import L2_COEFFICIENTS, Norm
 
 GENERATOR_CACHE = 'generator.npy'
 SCHUR_CACHE = 'generator_schur.npy'
@@ -181,21 +185,9 @@ def load_or_compute_generator(
   mmat_big = sparse.block_diag(mass_blocks(mmat.csr_rep, gamma, psi_scale), format='csr')
   del mmat
 
-  jac_dense = assemble_global(jac.csr_rep.toarray(), nrg=jac.nrg, ncg=jac.ncg, lg=jac.lg)
-  jac_gl = sparse.csr_array(jac_dense)
-  jac_gl.eliminate_zeros()
-  del jac_dense
-
-  mmat_dense = assemble_global(mmat_big.toarray(), nrg=jac.nrg, ncg=jac.ncg, lg=jac.lg)
-  mmat_gl = sparse.csr_array(mmat_dense)
-  mmat_gl.eliminate_zeros()
-  del mmat_dense
-
-  print('Shape of jac_gl is:', jac_gl.shape, flush=True)
-  print('shape of mmat_gl is:', mmat_gl.shape, flush=True)
-
-  reduced_jac = jac_gl[keep_global][:, keep_global].tocsr()
-  reduced_mmat = mmat_gl[keep_global][:, keep_global].tocsr()
+  reduced_jac = assemble_reduced(jac.csr_rep, jac, keep_global)
+  reduced_mmat = assemble_reduced(mmat_big, jac, keep_global)
+  del mmat_big
 
   print('Shape of reduced_Jac is:', reduced_jac.shape, flush=True)
   print('shape of reduced_Mmat is:', reduced_mmat.shape, flush=True)
@@ -242,13 +234,14 @@ def eigenvectors_from_schur(
   `T` upper triangular, so `T[i,i]`'s vector back-substitutes; `Z y` maps back.
   """
   # y[i] = 1, zeros above i, rest from (T[:i,:i] - lambda I) y = -T[:i,i].
-  if schur_t.shape != schur_z.shape:
+  # Z may be tall: n x k for T restricted to a k-dimensional invariant subspace.
+  if schur_t.shape[0] != schur_t.shape[1] or schur_z.shape[1] != schur_t.shape[0]:
     raise ValueError(
       f'Schur factor {schur_t.shape} and vectors {schur_z.shape} disagree')
 
   # Floor on the denominator, as LAPACK trevc uses for repeated eigenvalues.
   smin = float(np.finfo(np.float64).eps * np.abs(schur_t.diagonal()).max())
-  out = np.empty((schur_t.shape[0], indices.size), dtype=np.complex128)
+  out = np.empty((schur_z.shape[0], indices.size), dtype=np.complex128)
 
   for col, i in enumerate(int(k) for k in indices):
     lam = schur_t[i, i]
@@ -274,9 +267,12 @@ def write_eigenmode_restarts(
   nr_local: int,
   output_dir: str,
   n_eigvecs: int = 40,
+  norm: Norm = L2_COEFFICIENTS,
 ) -> tuple[NDArray[np.complex128], list[str]]:
   """Write the rightmost eigenvectors as restarts; returns eigenvalues and paths.
 
+  `schur_t`, `schur_z` factor the generator in `norm`'s coordinates, so each
+  vector is mapped back to coefficients before it is written.
   The caller pairs the two into `eigenmodes.json`; `io` cannot be imported here.
   """
   eigvals = spectrum_from_schur(schur_t)
@@ -285,7 +281,8 @@ def write_eigenmode_restarts(
   print(f'extracting {indices.size} eigenvectors from the Schur factor, '
         f'rightmost Re lambda = {chosen.real.max():.6g}', flush=True)
 
-  eigvecs = eigenvectors_from_schur(schur_t, schur_z, indices)
+  eigvecs = norm.to_basis(eigenvectors_from_schur(schur_t, schur_z, indices))
+  eigvecs = eigvecs / np.linalg.norm(eigvecs, axis=0)
   paths = write_restart_eigenvectors(
     eigvecs, keep_global, nr_local, os.path.join(output_dir, 'eigvecs_plot'))
   return chosen, paths
@@ -294,10 +291,13 @@ def write_eigenmode_restarts(
 def _compute_schur(
   generator: NDArray[np.float64],
   cache_dir: str,
+  norm: Norm,
 ) -> tuple[NDArray[np.complex128], NDArray[np.complex128]]:
-  """Factorise L = Z T Z*, caching both halves and plotting the diagonal."""
-  print('computing schur factorization', flush=True)
-  schur_raw, vectors_raw = scipy.linalg.schur(generator, output='complex')
+  """Factorise the generator in `norm`'s coordinates, caching both halves."""
+  operator = norm.operator(generator)
+  print(f'computing schur factorization ({norm.name} norm)', flush=True)
+  schur_raw, vectors_raw = scipy.linalg.schur(operator, output='complex')
+  del operator
   schur_t = np.asarray(schur_raw, dtype=np.complex128)
   schur_z = np.asarray(vectors_raw, dtype=np.complex128)
 
@@ -305,45 +305,48 @@ def _compute_schur(
   spectrum = spectrum_from_schur(schur_t)
   plt.figure()
   plt.scatter(spectrum.real, spectrum.imag, s=2, c='k')
-  plt.savefig(os.path.join(cache_dir, SCHUR_PLOT))
+  plt.savefig(os.path.join(cache_dir, norm.cache_name(SCHUR_PLOT)))
   plt.close()
 
-  _save_cached(cache_dir, SCHUR_CACHE, schur_t)
+  _save_cached(cache_dir, norm.cache_name(SCHUR_CACHE), schur_t)
   # Saved unconditionally; Z cannot be recovered from T alone.
-  _save_cached(cache_dir, SCHURVEC_CACHE, schur_z)
+  _save_cached(cache_dir, norm.cache_name(SCHURVEC_CACHE), schur_z)
   return schur_t, schur_z
 
 
 def load_or_compute_schur(
   generator: NDArray[np.float64],
   cache_dir: str = DEFAULT_CACHE_DIR,
+  norm: Norm = L2_COEFFICIENTS,
 ) -> NDArray[np.complex128]:
-  """Load the cached Schur factor T, or compute and persist it.
+  """Load the cached Schur factor T in `norm`, or compute and persist it.
 
   The cheap entry point for anything that only samples, so `Z` is never loaded.
   """
-  cached = _load_cached(cache_dir, SCHUR_CACHE, 'Schur factor')
+  cached = _load_cached(cache_dir, norm.cache_name(SCHUR_CACHE), f'Schur factor ({norm.name})')
   if cached is not None:
     return np.asarray(cached, dtype=np.complex128)
-  schur_t, _ = _compute_schur(generator, cache_dir)
+  schur_t, _ = _compute_schur(generator, cache_dir, norm)
   return schur_t
 
 
 def load_or_compute_schur_vectors(
   generator: NDArray[np.float64],
   cache_dir: str = DEFAULT_CACHE_DIR,
+  norm: Norm = L2_COEFFICIENTS,
 ) -> tuple[NDArray[np.complex128], NDArray[np.complex128]]:
-  """Load or compute both halves of L = Z T Z*."""
+  """Load or compute both halves of the generator's Schur form in `norm`."""
+  schur_name, vector_name = norm.cache_name(SCHUR_CACHE), norm.cache_name(SCHURVEC_CACHE)
   # Both halves must be cached to skip the factorisation; T alone redoes it.
-  cached_t = _load_cached(cache_dir, SCHUR_CACHE, 'Schur factor')
-  cached_z = _load_cached(cache_dir, SCHURVEC_CACHE, 'Schur vectors')
+  cached_t = _load_cached(cache_dir, schur_name, f'Schur factor ({norm.name})')
+  cached_z = _load_cached(cache_dir, vector_name, f'Schur vectors ({norm.name})')
   if cached_t is not None and cached_z is not None:
     return (np.asarray(cached_t, dtype=np.complex128),
             np.asarray(cached_z, dtype=np.complex128))
 
   if cached_t is not None:
     print(
-      f'{SCHUR_CACHE} is cached but {SCHURVEC_CACHE} is not; Z cannot be '
+      f'{schur_name} is cached but {vector_name} is not; Z cannot be '
       f'recovered from T alone, so the factorisation is being redone. It will '
       f'be cached afterwards.', flush=True)
-  return _compute_schur(generator, cache_dir)
+  return _compute_schur(generator, cache_dir, norm)

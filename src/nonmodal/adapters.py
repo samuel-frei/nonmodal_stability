@@ -16,6 +16,8 @@ with `&xmhd_options`. Both carry the same keys.
 * `read_timestep` -- `dt`, which the exported Jacobian is linear in.
 * `read_physical_scales` -- Alfven speed and time, Lundquist and magnetic
   Prandtl numbers, in whichever units the deck's driver used.
+* `read_field_scales` -- each field's typical size in OFT's stored units,
+  which weights the scaled L2 norm.
 """
 
 import math
@@ -202,4 +204,56 @@ def read_physical_scales(deck_path: str) -> PhysicalScales:
     alfven_time_s=length / alfven_speed,
     lundquist_number=length * alfven_speed / diffusivity,
     magnetic_prandtl_number=viscosity / diffusivity,
+  )
+
+
+@dataclass(frozen=True)
+class FieldScales:
+  """The typical size of each field, in the units OFT stores it in.
+
+  These weight the scaled L2 norm, so that a unit vector is O(1) in every
+  field rather than dominated by whichever has the largest raw units.
+  """
+
+  deck: str
+  #: OFT stores n / den_scale, so the sheet peak is n0 / den_scale.
+  density: float
+  #: The Alfven speed at the sheet peak density n0 [m/s].
+  velocity_m_s: float
+  #: t0 [eV].
+  temperature_eV: float
+  #: The Harris flux psi0 * lam_b [T m]; psi = -psi0 lam_b log cosh(z/lam_b).
+  flux_T_m: float
+  #: The asymptotic field B0 = psi0 [T], which scales the out-of-plane By.
+  field_T: float
+
+  def describe(self) -> dict[str, Any]:
+    """A JSON-ready dictionary."""
+    return asdict(self)
+
+
+def read_field_scales(deck_path: str) -> FieldScales:
+  """Per-field reference sizes of a Harris-sheet deck, for weighting a norm.
+
+  The velocity scale is the Alfven speed at the sheet peak density `n0`, the
+  same reference `read_physical_scales` uses for `tau_A`.
+  """
+  with open(deck_path, encoding='utf-8', errors='replace') as f:
+    text = f.read()
+  group = simulation_namelist(text)
+
+  def value(key: str) -> float:
+    number = float(read_namelist_value(text, group, key).lower().replace('d', 'e'))
+    if number <= 0.0:
+      raise ValueError(f'{key} must be positive to scale a norm, got {number}')
+    return number
+
+  field = value('psi0')
+  return FieldScales(
+    deck=os.path.abspath(deck_path),
+    density=value('n0') / value('den_scale'),
+    velocity_m_s=read_physical_scales(deck_path).alfven_speed_m_s,
+    temperature_eV=value('t0'),
+    flux_T_m=field * value('lam_b'),
+    field_T=field,
   )

@@ -19,6 +19,7 @@ from nonmodal.io import (
   write_pseudomodes,
 )
 from nonmodal.sampling import Bounds, SpectrumSource
+from nonmodal.subspace import Subspace
 
 
 def _samples() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -61,7 +62,9 @@ def test_metadata_round_trip(tmp_path) -> None:
   metadata = build_metadata(
     config, Bounds(-1.0, 1.0, -2.0, 2.0),
     n_points=16, n_evaluated=9, half_plane=True, effective_workers=4,
-    physical_scales={'alfven_time_s': 3.1e-6})
+    physical_scales={'alfven_time_s': 3.1e-6},
+    norm={'name': 'scaled-L2', 'description': 'd', 'field_scales': {'U_n': 1.0}},
+    subspace=Subspace(restricted=False, dimension=4, full_dimension=4).describe())
 
   write_metadata(str(tmp_path), metadata)
   got = read_metadata(str(tmp_path))
@@ -78,7 +81,9 @@ def test_metadata_is_json_serialisable_as_written(tmp_path) -> None:
   metadata = build_metadata(
     config, Bounds.around_points(_samples()[0]),
     n_points=3, n_evaluated=3, half_plane=False, effective_workers=1,
-    physical_scales={'alfven_time_s': 3.1e-6})
+    physical_scales={'alfven_time_s': 3.1e-6},
+    norm={'name': 'scaled-L2', 'description': 'd', 'field_scales': {'U_n': 1.0}},
+    subspace=Subspace(restricted=False, dimension=4, full_dimension=4).describe())
 
   write_metadata(str(tmp_path), metadata)
   assert json.loads((tmp_path / 'run_metadata.json').read_text()) == metadata

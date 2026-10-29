@@ -9,7 +9,8 @@ the resolvent norm
 
 $$\sigma_{\min}(zI - T)$$
 
-over a region of the complex plane. The $\varepsilon$-pseudospectrum contours
+over a region of the complex plane, in the scaled L2 norm of the fields (see
+[Norm](#norm)). The $\varepsilon$-pseudospectrum contours
 that result show how far the operator's response can be amplified by
 perturbations that a purely modal (eigenvalue) analysis would call stable.
 
@@ -42,12 +43,17 @@ uv run jupyter lab examples/pseudospectra_intro.ipynb   # requires jupyter
 
 ## Inputs
 
-A run needs two HDF5 files produced by the simulation:
+A run needs three HDF5 files produced by the simulation:
 
 | File | Dataset group | Contents |
 |---|---|---|
 | `lin_ops.h5` | `/jacobian` | linearised Jacobian |
 | `mass_mat.h5` | `/massmat` | mass matrix (one field block) |
+| `stiff_mat.h5` | `/stiffmat` | Laplacian stiffness matrix (one field block) |
+
+`stiff_mat.h5` is written only by linear runs of the `nonmodal` branch of our
+OpenFUSIONToolkit fork. It is needed to pick out resolved modes; `--all-modes`
+runs without it.
 
 Index arrays inside them are one-based and converted on load.
 
@@ -64,11 +70,34 @@ Reduction keeps blocks `(0, 1, 3, 4, 5)` — `n, velx, velz, T, psi` — droppin
 `vely` and `by`, and additionally drops boundary-condition rows. See
 `KEPT_BLOCK_IDS` in `src/nonmodal/fields.py`.
 
+### Norm
+
+Every resolvent norm, Kreiss constant and pseudomode is measured in the **scaled L2
+norm** of the fields,
+
+$$\|x\|_N^2 = \sum_f \int \left(\frac{u_f}{s_f}\right)^2 dA,$$
+
+where `s_f` is the typical size of field `f`, read from the deck beside the export:
+
+| field | `s_f` |
+|---|---|
+| n | `n0/den_scale` (OFT stores `n/den_scale`) |
+| v_x, v_z | Alfven speed at the sheet peak, `psi0/sqrt(mu0 m_p n0)` |
+| T | `t0` |
+| psi | `psi0*lam_b` |
+
+The integral (the mass matrix) removes the mesh from the norm, so results converge
+with resolution; the scales remove the units, so psi counts as much as velocity.
+The Euclidean norm of the raw coefficients does neither. In matrix form
+`N = R^T R`, and the commands work with `B = R L R^-1`, which has `L`'s eigenvalues.
+It is not the energy norm: that weights velocity by the base density and the field
+by `|grad psi|^2`, and needs matrices OFT does not export yet.
+
 ## Command-line use
 
-There are three subcommands, because their requirements differ. `run` needs the
-HDF5 matrices and a machine with cores; `pseudomode` needs the operator but not
-the cores; `plot` needs only a finished output directory.
+There are four subcommands, because their requirements differ. `run` and `kreiss`
+need the HDF5 matrices and a machine with cores; `pseudomode` needs the operator but
+not the cores; `plot` needs only a finished output directory.
 
 ```bash
 # On the cluster, from a directory containing the input files.
@@ -85,9 +114,57 @@ uv run nonmodal pseudomode --at 5e5-2.4e4j
 uv run nonmodal pseudomode --at 5e5-2.4e4j --at -1e6+3e5j --phases 8
 ```
 
+```bash
+# A rigorous lower bound on the Kreiss constant, and so on transient growth:
+uv run nonmodal kreiss --nprocs 32
+```
+
 `python -m nonmodal` works identically. `cases/harris_linear_20x6z/ps1.sbatch` runs
 both steps as one SLURM job: submit it from the directory holding the exports, and
 set `NONMODAL_REPO` if this checkout is not the one it should use.
+
+### Kreiss constant
+
+`K(L) = sup_{Re z > 0} Re(z) ||(zI - L)^-1||` brackets the transient growth the
+non-normality permits: `K <= sup_t ||e^{tL}|| <= e n K` (Kreiss 1962; the sharp
+factor `e n` is Spijker 1991). Certified global algorithms (Mitchell 2020) cost
+`O(n^4)` or more, out of reach at `n = 10500`, so `kreiss` computes a lower bound:
+
+1. a log-spaced scan of `x / sigma_min(x)` along the positive real axis, refined
+   with a bounded 1-D optimiser. For a real operator the resolvent norm is
+   symmetric about the real axis, which is therefore where the supremum is
+   expected -- an assumption the next two steps test rather than trust;
+2. a check that the real-axis maximiser is a maximum, not a saddle, in `Im z`;
+3. a coarse log grid over the right half-plane; if it beats the real axis, that
+   point is polished locally, reported instead, and flagged.
+
+Every evaluated point is a true lower bound on `K`, so a wrong assumption weakens
+the bound rather than corrupting it. `kreiss.json` records `K`, `z*`, both theorem
+bounds, the two checks, the real-axis scan, and the physical scales. A stable
+normal operator gives `K -> 1` only as `x -> infinity`; the result then reports the
+maximum at the scan's upper end. An unstable operator has `K = infinity` and is
+rejected.
+
+### Resolved modes
+
+On a finite-element mesh the stiff end of the spectrum belongs to the grid, and
+that is where the resolvent norm of the whole operator peaks: on the 10x3z Harris
+mesh the Kreiss maximiser sat at the spectral radius, with one oscillation per
+element. So by default `run`, `pseudomode` and `kreiss` analyse only the modes
+the mesh resolves.
+
+Each eigenmode gets an effective wavenumber per field,
+`k_f^2 = x_f K x_f / x_f M x_f`, from the exported Laplacian `K` and scalar mass
+`M`, and the mesh's largest is `k_max^2 = max eig(M^-1 K)`. A mode is kept when
+`k_f / k_max < --resolution-cutoff` (default 0.1) in every field it occupies -- the
+worst field decides, however little of the mode's energy it carries. The Schur
+form is then reordered so its leading block is `L` restricted exactly to the kept
+modes' span, in the same norm. `--all-modes` analyses all of `L`.
+
+The per-mode wavenumbers are cached beside the Schur factor
+(`mode_resolution_l2s.npz`), so trying another cutoff costs only the reorder.
+`run_metadata.json`, `pseudomodes.json` and `kreiss.json` record the cutoff,
+`k_max` per field, and the kept eigenvalues under `subspace`.
 
 ### Pseudomodes
 
@@ -158,7 +235,8 @@ so only the upper half-plane is evaluated and the rest follows by conjugation.
   both flat
 - `pseudo_eigvals.npy` — the spectrum, so `plot` can draw its overlay
   standalone
-- `run_metadata.json` — sampling strategy, bounds, worker counts, input paths
+- `run_metadata.json` — sampling strategy, bounds, worker counts, input paths, the
+  norm and its field scales, and the physical scales
 - `eigvecs_plot/xmhd2d_*.rst` — the rightmost eigenvectors as restart files, with
   `eigvecs_plot/eigenmodes.json` naming which eigenvalue each file holds. Selection
   is by real part alone, so a conjugate pair contributes two files showing the same
@@ -179,13 +257,20 @@ vector rather than ARPACK's random one.
 
 ## Caching — read this before trusting a result
 
-Three expensive intermediates are cached under `--cache-dir` (default `.`):
+Four expensive intermediates are cached under `--cache-dir` (default `.`):
 
 ```
-generator.npy  generator_schur.npy  generator_schurvecs.npy
+generator.npy  generator_schur_l2s.npy  generator_schurvecs_l2s.npy  mode_resolution_l2s.npz
 ```
 
-`generator_schurvecs.npy` holds the unitary `Z` of `L = Z T Z*`. Sampling never needs
+`mode_resolution_l2s.npz` is the one exception to filename-only keys: it stores the
+eigenvalues it was computed for and is ignored unless they equal `diag(T)` exactly.
+It does not notice a changed `stiff_mat.h5`, so delete it after re-exporting.
+
+`generator.npy` is `L` itself, shared by every norm; the `_l2s` files factorise it in
+the scaled L2 norm. Untagged `generator_schur*.npy` files are factors in the plain
+l2 coefficient norm, which only the library writes, and the commands never read them.
+`generator_schurvecs_l2s.npy` holds the unitary `Z` of `B = Z T Z*`. Sampling never needs
 it, but eigenvectors and pseudomodes do, and `Z` cannot be recovered from a cached `T` —
 so a cache holding only `T` has to redo the factorisation once. It says so before
 starting.
@@ -197,7 +282,7 @@ present will silently produce results for the *previous* problem.
 Delete them by hand after any such change:
 
 ```bash
-rm -f generator*.npy
+rm -f generator*.npy mode_resolution*.npz
 ```
 
 Older runs left `real_jacobian.npy` and `full_reduced_*.npy`. Those hold the

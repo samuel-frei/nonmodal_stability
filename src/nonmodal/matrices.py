@@ -2,6 +2,7 @@
 
 * `HDF5Matrix` -- one matrix read from an HDF5 dataset group.
 * `assemble_global` -- scatter a local matrix into a dense global one.
+* `assemble_reduced` -- scatter, then keep only the rows and columns a mask names.
 """
 
 from typing import Any
@@ -57,3 +58,21 @@ def assemble_global(
       jl = lg[j]
       outmat[ik, jl] += inmat[i, j]
   return outmat
+
+
+def assemble_reduced(
+  local: Any,
+  layout: HDF5Matrix,
+  keep_global: NDArray[np.bool_],
+) -> Any:
+  """Scatter a local matrix into `layout`'s global numbering, then reduce it.
+
+  One path for every matrix that must share the reduced Jacobian's rows: the
+  dynamics mass and the norm matrix are both built here.
+  """
+  dense = assemble_global(
+    sparse.csr_array(local).toarray(), nrg=layout.nrg, ncg=layout.ncg, lg=layout.lg)
+  assembled = sparse.csr_array(dense)
+  assembled.eliminate_zeros()
+  del dense
+  return assembled[keep_global][:, keep_global].tocsr()

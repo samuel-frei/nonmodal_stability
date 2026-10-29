@@ -6,24 +6,32 @@
 """
 
 import os
-from typing import Any
+import socket
+from datetime import UTC, datetime
+from typing import Any, overload
 
 import numpy as np
 from numpy.typing import NDArray
 
 from .adapters import find_input_deck, read_physical_scales
-from .config import PlotConfig, PseudomodeConfig, RunConfig
+from .config import KreissConfig, PlotConfig, PseudomodeConfig, RunConfig
 from .fields import build_reduction_mapping, write_restart_modes
 from .io import (
+  OPERATOR_DESCRIPTION,
   build_metadata,
   load_samples,
   save_samples,
+  save_spectrum,
   write_eigenmodes,
+  write_kreiss,
   write_metadata,
   write_pseudomodes,
 )
+from .kreiss import kreiss_constant
+from .norm import Norm, scaled_l2_norm
 from .operator import (
   load_or_compute_generator,
+  load_or_compute_schur,
   load_or_compute_schur_vectors,
   spectrum_from_schur,
   write_eigenmode_restarts,
@@ -37,7 +45,9 @@ from .plotting import (
 from .pseudomode import pseudomode_at
 from .pseudospectrum import _worker_count, choose_contour_levels, sample_sigmin
 from .refine import refine
+from .resolution import load_or_compute_resolution
 from .sampling import Bounds, ResolvedSource, mirror_conjugates
+from .subspace import Subspace, restrict_to_resolved, whole_operator
 
 
 def _sample(
@@ -100,17 +110,25 @@ def run_pipeline(config: RunConfig) -> None:
 
   generator = load_or_compute_generator(
     config.jacobian, config.massmat, keep_global, config.cache_dir, config.timestep)
-  # A real operator's spectrum is conjugate-symmetric, so half the plane serves.
   real_operator = bool(np.isrealobj(generator))
-  half_plane = real_operator and not config.force_full_plane
+
+  # Every resolvent norm is the scaled L2 norm; R is rebuilt even on a cache
+  # hit, since eigenvectors need it to return to coefficients.
+  norm = scaled_l2_norm(config.jacobian, config.massmat, keep_global)
 
   # One factorisation serves all three: spectrum, eigenvectors, and sampling.
-  schur_t, schur_z = load_or_compute_schur_vectors(generator, config.cache_dir)
+  schur_t, schur_z = load_or_compute_schur_vectors(generator, config.cache_dir, norm)
   del generator
+  save_spectrum(config.output_dir, spectrum_from_schur(schur_t))
+  # Everything below sees only the resolved modes, unless --all-modes.
+  schur_t, schur_z, subspace = _restrict(config, schur_t, schur_z, norm, keep_global)
+  # A real operator's spectrum is conjugate-symmetric, so half the plane serves --
+  # unless a restriction split a pair.
+  half_plane = real_operator and subspace.conjugate_closed and not config.force_full_plane
   eigvals = spectrum_from_schur(schur_t)
   _write_eigenmode_sidecar(config, *write_eigenmode_restarts(
     schur_t, schur_z, keep_global, nr_local, config.output_dir,
-    config.n_eigvecs))
+    config.n_eigvecs, norm))
   # Z is the same size as T and sampling never touches it.
   del schur_z
 
@@ -132,7 +150,53 @@ def run_pipeline(config: RunConfig) -> None:
     n_evaluated=n_evaluated,
     half_plane=half_plane,
     effective_workers=_worker_count(n_evaluated, config.nprocs),
-    physical_scales=_physical_scales(config.jacobian)))
+    physical_scales=_physical_scales(config.jacobian),
+    norm=norm.describe(),
+    subspace=subspace.describe()))
+
+
+_Compute = RunConfig | PseudomodeConfig | KreissConfig
+
+
+def _resolution_cached(
+  config: _Compute,
+  schur_t: NDArray[np.complex128],
+  norm: Norm,
+  keep_global: NDArray[np.bool_],
+) -> bool:
+  """Whether the mode resolution for this `T` is already in the cache."""
+  return load_or_compute_resolution(
+    schur_t, None, norm, config.cache_dir, config.jacobian, config.massmat,
+    config.stiffmat, keep_global) is not None
+
+
+@overload
+def _restrict(
+  config: _Compute, schur_t: NDArray[np.complex128], schur_z: NDArray[np.complex128],
+  norm: Norm, keep_global: NDArray[np.bool_],
+) -> tuple[NDArray[np.complex128], NDArray[np.complex128], Subspace]: ...
+@overload
+def _restrict(
+  config: _Compute, schur_t: NDArray[np.complex128], schur_z: None,
+  norm: Norm, keep_global: NDArray[np.bool_],
+) -> tuple[NDArray[np.complex128], NDArray[np.complex128] | None, Subspace]: ...
+def _restrict(
+  config: _Compute,
+  schur_t: NDArray[np.complex128],
+  schur_z: NDArray[np.complex128] | None,
+  norm: Norm,
+  keep_global: NDArray[np.bool_],
+) -> tuple[NDArray[np.complex128], NDArray[np.complex128] | None, Subspace]:
+  """Restrict to the resolved modes, or pass everything through for --all-modes."""
+  if config.all_modes:
+    return schur_t, schur_z, whole_operator(schur_t)
+  resolution = load_or_compute_resolution(
+    schur_t, schur_z, norm, config.cache_dir, config.jacobian, config.massmat,
+    config.stiffmat, keep_global)
+  if resolution is None:
+    raise RuntimeError('the mode resolution needs the Schur vectors, which were not loaded')
+  return restrict_to_resolved(
+    schur_t, schur_z, resolution, config.resolution_cutoff, config.stiffmat)
 
 
 def _physical_scales(jacobian_path: str) -> dict[str, Any]:
@@ -150,10 +214,12 @@ def pseudomode_run(config: PseudomodeConfig) -> list[str]:
 
   generator = load_or_compute_generator(
     config.jacobian, config.massmat, keep_global, config.cache_dir, config.timestep)
-  schur_t, schur_z = load_or_compute_schur_vectors(generator, config.cache_dir)
+  norm = scaled_l2_norm(config.jacobian, config.massmat, keep_global)
+  schur_t, schur_z = load_or_compute_schur_vectors(generator, config.cache_dir, norm)
   del generator
+  schur_t, schur_z, subspace = _restrict(config, schur_t, schur_z, norm, keep_global)
 
-  modes = [pseudomode_at(schur_t, schur_z, z, config.tol) for z in config.points]
+  modes = [pseudomode_at(schur_t, schur_z, z, config.tol, norm) for z in config.points]
   del schur_t, schur_z
 
   mode_dir = os.path.join(config.output_dir, config.mode_dir)
@@ -170,8 +236,71 @@ def pseudomode_run(config: PseudomodeConfig) -> list[str]:
     'modes': [m.describe() for m in modes],
     'files': [os.path.relpath(p, config.output_dir) for p in paths],
     'physical_scales': _physical_scales(config.jacobian),
+    'norm': norm.describe(),
+    'subspace': subspace.describe(),
   })
   return paths
+
+
+def kreiss_run(config: KreissConfig) -> dict[str, Any]:
+  """Bound the Kreiss constant of the generator and write `kreiss.json`."""
+  _, keep_global = build_reduction_mapping(config.jacobian)
+  generator = load_or_compute_generator(
+    config.jacobian, config.massmat, keep_global, config.cache_dir, config.timestep)
+  norm = scaled_l2_norm(config.jacobian, config.massmat, keep_global)
+  # The search needs only T. Z is loaded only when the mode resolution is not
+  # yet cached, since that is computed from the eigenvectors.
+  schur_t = load_or_compute_schur(generator, config.cache_dir, norm)
+  schur_z = None
+  if not config.all_modes and not _resolution_cached(config, schur_t, norm, keep_global):
+    schur_t, schur_z = load_or_compute_schur_vectors(generator, config.cache_dir, norm)
+  del generator
+  save_spectrum(config.output_dir, spectrum_from_schur(schur_t))
+  schur_t, _, subspace = _restrict(config, schur_t, schur_z, norm, keep_global)
+  del schur_z
+  if not subspace.conjugate_closed:
+    print('warning: the off-axis check scans Im z > 0 only, which assumes a '
+          'conjugate-symmetric spectrum', flush=True)
+
+  result = kreiss_constant(
+    schur_t, config.nprocs, axis_points=config.axis_points,
+    offaxis_x=config.offaxis_x, offaxis_y=config.offaxis_y, tol=config.tol)
+  del schur_t
+
+  scales = _physical_scales(config.jacobian)
+  tau_a = float(scales['alfven_time_s'])
+  payload: dict[str, Any] = {
+    'created_utc': datetime.now(UTC).isoformat(timespec='seconds').replace('+00:00', 'Z'),
+    'hostname': socket.gethostname(),
+    'cwd': os.getcwd(),
+    'slurm_job_id': os.environ.get('SLURM_JOB_ID', ''),
+    'run_tag': config.run_tag,
+    'case_tag': config.case_tag,
+    'inputs': {
+      'jacobian': os.path.abspath(config.jacobian),
+      'massmat': os.path.abspath(config.massmat),
+      'cache_dir': os.path.abspath(config.cache_dir),
+    },
+    'operator': OPERATOR_DESCRIPTION,
+    'norm': norm.describe(),
+    'subspace': subspace.describe(),
+    'physical_scales': scales,
+    'z_star_times_tau_A': [result.z_star_real * tau_a, result.z_star_imag * tau_a],
+    'spectral_abscissa_times_tau_A': result.spectral_abscissa * tau_a,
+    'result': result.describe(),
+  }
+  write_kreiss(config.output_dir, payload)
+
+  where = 'on the real axis' if not result.offaxis_exceeds_axis else 'OFF the real axis'
+  print(f'Kreiss lower bound K = {result.kreiss:.6g} at z* = '
+        f'{complex(result.z_star_real, result.z_star_imag):.6g} ({where}); '
+        f'sup_t ||e^(tL)|| in [{result.kreiss:.4g}, {result.upper_bound:.4g}]', flush=True)
+  if not result.axis_is_local_max_in_y:
+    print('warning: the real-axis maximiser is a saddle in Im z, not a maximum', flush=True)
+  if result.axis_at_upper_end:
+    print('note: the real-axis maximum is at the scan\'s upper end; K -> 1 there, as for '
+          'a (nearly) normal operator', flush=True)
+  return payload
 
 
 def plot_run(config: PlotConfig) -> tuple[str, str]:

@@ -2,13 +2,16 @@
 
 Sample sets are stored flat: `pseudo_z.npy` beside `pseudo_sigmin.npy`, with
 `pseudo_eigvals.npy` alongside so `nonmodal plot` can draw its overlay without
-reloading the operator.
+reloading the operator. That is the spectrum actually analysed -- the resolved
+modes, unless `--all-modes`; `spectrum.npy` is always the full spectrum of `L`.
 
 * `save_samples` / `load_samples` -- the flat point set and its values.
+* `save_spectrum` -- the full spectrum, before any restriction.
 * `build_metadata` -- describe one run, for reproducibility.
 * `write_metadata` / `read_metadata` -- the run sidecar.
 * `write_pseudomodes` / `read_pseudomodes` -- the pseudomode sidecar.
 * `write_eigenmodes` / `read_eigenmodes` -- which eigenvalue each restart holds.
+* `write_kreiss` / `read_kreiss` -- the Kreiss bound and how far to trust it.
 """
 
 import json
@@ -26,9 +29,11 @@ from .sampling import Bounds
 POINTS_FILE = 'pseudo_z.npy'
 SIGMIN_FILE = 'pseudo_sigmin.npy'
 EIGVALS_FILE = 'pseudo_eigvals.npy'
+SPECTRUM_FILE = 'spectrum.npy'
 METADATA_FILE = 'run_metadata.json'
 PSEUDOMODE_FILE = 'pseudomodes.json'
 EIGENMODE_FILE = 'eigenmodes.json'
+KREISS_FILE = 'kreiss.json'
 #: What the sampled operator is; eigenvalues and z are growth rates in 1/s.
 OPERATOR_DESCRIPTION = (
   'generator L = M^-1 (M - J)/dt of du/dt = L u; eigenvalues and sample points '
@@ -43,11 +48,14 @@ def build_metadata(
   half_plane: bool,
   effective_workers: int,
   physical_scales: dict[str, Any],
+  norm: dict[str, Any],
+  subspace: dict[str, Any],
 ) -> dict[str, Any]:
   """Describe one run, for reproducibility and traceability.
 
-  Plots in different units look alike, so the operator and the scales that
-  turn its eigenvalues into normalised growth rates are recorded here.
+  Plots in different units or norms look alike, so the operator, the norm,
+  and the scales that turn its eigenvalues into normalised growth rates are
+  recorded here.
   """
   return {
     'created_utc': datetime.now(UTC).isoformat(timespec='seconds').replace('+00:00', 'Z'),
@@ -73,6 +81,8 @@ def build_metadata(
     'nprocs_effective': int(effective_workers),
     'operator': OPERATOR_DESCRIPTION,
     'physical_scales': physical_scales,
+    'norm': norm,
+    'subspace': subspace,
   }
 
 
@@ -126,6 +136,16 @@ def read_eigenmodes(output_dir: str) -> dict[str, Any]:
   return _read_json(output_dir, EIGENMODE_FILE)
 
 
+def write_kreiss(output_dir: str, payload: dict[str, Any]) -> None:
+  """Persist the Kreiss bound, its location, both checks and the run's provenance."""
+  _write_json(output_dir, KREISS_FILE, payload, 'Kreiss result')
+
+
+def read_kreiss(output_dir: str) -> dict[str, Any]:
+  """Read back the Kreiss sidecar."""
+  return _read_json(output_dir, KREISS_FILE)
+
+
 def save_samples(
   output_dir: str,
   z: NDArray[np.complex128],
@@ -138,6 +158,14 @@ def save_samples(
   np.save(os.path.join(output_dir, SIGMIN_FILE), sigmin)
   np.save(os.path.join(output_dir, EIGVALS_FILE), eigvals)
   print(f'wrote {z.size} samples to {os.path.abspath(output_dir)}', flush=True)
+
+
+def save_spectrum(output_dir: str, eigvals: NDArray[np.complexfloating]) -> str:
+  """Save the full spectrum of `L`, before any restriction, as `spectrum.npy`."""
+  os.makedirs(output_dir, exist_ok=True)
+  path = os.path.join(output_dir, SPECTRUM_FILE)
+  np.save(path, np.asarray(eigvals, dtype=np.complex128))
+  return path
 
 
 def load_samples(

@@ -6,13 +6,16 @@ run fails before any matrix is loaded.
 
 * `RunConfig` -- everything `nonmodal run` needs.
 * `PseudomodeConfig` -- everything `nonmodal pseudomode` needs.
+* `KreissConfig` -- everything `nonmodal kreiss` needs.
 * `PlotConfig` -- everything `nonmodal plot` needs.
 """
 
 from dataclasses import dataclass, field
 
+from .kreiss import DEFAULT_AXIS_POINTS, DEFAULT_OFFAXIS_X, DEFAULT_OFFAXIS_Y
 from .operator import DEFAULT_TIMESTEP
 from .pseudospectrum import DEFAULT_MODE_TOL
+from .resolution import DEFAULT_RESOLUTION_CUTOFF
 from .sampling import PointSource
 
 DEFAULT_N_EIGVECS = 40
@@ -43,6 +46,12 @@ class RunConfig:
   timestep: float = DEFAULT_TIMESTEP
   #: How many eigenvectors to compute and write out as restart files.
   n_eigvecs: int = DEFAULT_N_EIGVECS
+  #: Laplacian stiffness of the export, which decides which modes are resolved.
+  stiffmat: str = './stiff_mat.h5'
+  #: Keep modes whose worst field has k_f / k_max below this.
+  resolution_cutoff: float = DEFAULT_RESOLUTION_CUTOFF
+  #: Analyse all of L, unresolved grid modes included.
+  all_modes: bool = False
   run_tag: str = ''
   case_tag: str = ''
 
@@ -55,6 +64,8 @@ class RunConfig:
       raise ValueError('refine-rounds must be >= 1')
     if self.timestep <= 0.0:
       raise ValueError('timestep must be positive')
+    if not 0.0 < self.resolution_cutoff <= 1.0:
+      raise ValueError('resolution-cutoff must be in (0, 1]')
     if self.n_eigvecs < 1:
       raise ValueError('n-eigvecs must be >= 1')
 
@@ -78,6 +89,12 @@ class PseudomodeConfig:
   phases: int = 1
   tol: float = DEFAULT_MODE_TOL
   timestep: float = DEFAULT_TIMESTEP
+  #: Laplacian stiffness of the export, which decides which modes are resolved.
+  stiffmat: str = './stiff_mat.h5'
+  #: Keep modes whose worst field has k_f / k_max below this.
+  resolution_cutoff: float = DEFAULT_RESOLUTION_CUTOFF
+  #: Analyse all of L, unresolved grid modes included.
+  all_modes: bool = False
   run_tag: str = ''
   case_tag: str = ''
 
@@ -90,6 +107,52 @@ class PseudomodeConfig:
       raise ValueError('mode-tol must be positive')
     if self.timestep <= 0.0:
       raise ValueError('timestep must be positive')
+    if not 0.0 < self.resolution_cutoff <= 1.0:
+      raise ValueError('resolution-cutoff must be in (0, 1]')
+
+
+@dataclass(frozen=True)
+class KreissConfig:
+  """Everything `nonmodal kreiss` needs.
+
+  A compute command: the operator and its Schur factor, then a real-axis
+  search with an off-axis check. No sampled run is needed to seed it.
+  """
+
+  jacobian: str = './lin_ops.h5'
+  massmat: str = './mass_mat.h5'
+  cache_dir: str = '.'
+  output_dir: str = 'pseudospectrum'
+  #: Log-spaced points along the positive real axis before refinement.
+  axis_points: int = DEFAULT_AXIS_POINTS
+  #: The off-axis check's grid: log-spaced columns in Re z and rows in Im z.
+  offaxis_x: int = DEFAULT_OFFAXIS_X
+  offaxis_y: int = DEFAULT_OFFAXIS_Y
+  nprocs: int = 128
+  tol: float = DEFAULT_MODE_TOL
+  timestep: float = DEFAULT_TIMESTEP
+  #: Laplacian stiffness of the export, which decides which modes are resolved.
+  stiffmat: str = './stiff_mat.h5'
+  #: Keep modes whose worst field has k_f / k_max below this.
+  resolution_cutoff: float = DEFAULT_RESOLUTION_CUTOFF
+  #: Analyse all of L, unresolved grid modes included.
+  all_modes: bool = False
+  run_tag: str = ''
+  case_tag: str = ''
+
+  def __post_init__(self) -> None:
+    if self.axis_points < 3:
+      raise ValueError('axis-points must be >= 3')
+    if self.offaxis_x < 2 or self.offaxis_y < 2:
+      raise ValueError('offaxis-x and offaxis-y must be >= 2')
+    if self.nprocs < 1:
+      raise ValueError('nprocs must be >= 1')
+    if self.tol <= 0.0:
+      raise ValueError('kreiss-tol must be positive')
+    if self.timestep <= 0.0:
+      raise ValueError('timestep must be positive')
+    if not 0.0 < self.resolution_cutoff <= 1.0:
+      raise ValueError('resolution-cutoff must be in (0, 1]')
 
 
 @dataclass(frozen=True)

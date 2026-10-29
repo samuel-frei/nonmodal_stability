@@ -1,14 +1,15 @@
 """Command-line interface.
 
-Three subcommands, because their requirements differ: `run` needs the HDF5
-matrices and a machine with cores, `pseudomode` needs the operator but not the
-cores, `plot` needs only a finished output directory. This is the only module
+Four subcommands, because their requirements differ: `run` and `kreiss` need
+the HDF5 matrices and a machine with cores, `pseudomode` needs the operator but
+not the cores, `plot` needs only a finished output directory. This is the only module
 that touches `argparse.Namespace`. A flag that cannot take effect in the given
 mode raises rather than being ignored.
 
 * `build_parser` / `parse_args` -- the argparse surface.
 * `run_config_from_args` / `pseudomode_config_from_args` /
-  `plot_config_from_args` -- resolve a `Namespace` into a frozen config.
+  `kreiss_config_from_args` / `plot_config_from_args` -- resolve a `Namespace`
+  into a frozen config.
 * `main` -- console entry point; dispatches to `pipeline`.
 """
 
@@ -20,13 +21,16 @@ from .config import (
   DEFAULT_N_EIGVECS,
   DEFAULT_NLEVELS,
   DEFAULT_REFINE_ROUNDS,
+  KreissConfig,
   PlotConfig,
   PseudomodeConfig,
   RunConfig,
 )
+from .kreiss import DEFAULT_AXIS_POINTS, DEFAULT_OFFAXIS_X, DEFAULT_OFFAXIS_Y
 from .operator import DEFAULT_TIMESTEP
-from .pipeline import plot_run, pseudomode_run, run_pipeline
+from .pipeline import kreiss_run, plot_run, pseudomode_run, run_pipeline
 from .pseudospectrum import DEFAULT_MODE_TOL
+from .resolution import DEFAULT_RESOLUTION_CUTOFF
 from .sampling import (
   DEFAULT_BOUNDS_PAD,
   DEFAULT_GRID_NX,
@@ -100,6 +104,39 @@ def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
                    help='Case identifier for metadata tracking.')
 
 
+def _add_subspace_arguments(parser: argparse.ArgumentParser) -> None:
+  sub = parser.add_argument_group('subspace')
+  sub.add_argument('--stiffmat', type=str, default=None,
+                   help='HDF5 file holding the /stiffmat Laplacian, written beside the '
+                        'mass matrix by linear runs of the nonmodal OFT fork (default '
+                        './stiff_mat.h5).')
+  sub.add_argument('--resolution-cutoff', type=float, default=None,
+                   help=f'Analyse only modes that the mesh resolves: in every field a '
+                        f'mode occupies, its effective wavenumber must be below this '
+                        f'fraction of the largest the mesh can hold (default '
+                        f'{DEFAULT_RESOLUTION_CUTOFF:g}). The Schur form is restricted '
+                        f'to their invariant subspace.')
+  sub.add_argument('--all-modes', action='store_true',
+                   help='Analyse all of L, unresolved grid modes included. Needs no '
+                        'stiffness matrix.')
+
+
+def _subspace_args(args: argparse.Namespace) -> tuple[str, float, bool]:
+  """Config fields for the restriction; its flags are rejected with --all-modes."""
+  if args.all_modes:
+    inert = [flag for flag, value in (('--stiffmat', args.stiffmat),
+                                      ('--resolution-cutoff', args.resolution_cutoff))
+             if value is not None]
+    if inert:
+      raise ValueError(
+        f'--all-modes analyses the whole operator, so {", ".join(inert)} would '
+        f'have no effect')
+  stiffmat = './stiff_mat.h5' if args.stiffmat is None else str(args.stiffmat)
+  cutoff = (DEFAULT_RESOLUTION_CUTOFF if args.resolution_cutoff is None
+            else float(args.resolution_cutoff))
+  return stiffmat, cutoff, bool(args.all_modes)
+
+
 def _complex_arg(text: str) -> complex:
   """Parse a complex literal such as `5e5-2.4e4j`."""
   try:
@@ -153,6 +190,40 @@ def _add_pseudomode_arguments(parser: argparse.ArgumentParser) -> None:
                   help='Case identifier for metadata tracking.')
 
 
+def _add_kreiss_arguments(parser: argparse.ArgumentParser) -> None:
+  search = parser.add_argument_group('search')
+  search.add_argument('--axis-points', type=int, default=DEFAULT_AXIS_POINTS,
+                      help=f'Log-spaced points on the positive real axis before '
+                           f'refinement (default {DEFAULT_AXIS_POINTS}).')
+  search.add_argument('--offaxis-x', type=int, default=DEFAULT_OFFAXIS_X,
+                      help=f'Columns of the off-axis check grid, log-spaced in Re z '
+                           f'(default {DEFAULT_OFFAXIS_X}).')
+  search.add_argument('--offaxis-y', type=int, default=DEFAULT_OFFAXIS_Y,
+                      help=f'Rows of the off-axis check grid, log-spaced in Im z '
+                           f'(default {DEFAULT_OFFAXIS_Y}).')
+  search.add_argument('--kreiss-tol', type=float, default=None,
+                      help=f'ARPACK tolerance for the refinement steps (default '
+                           f'{DEFAULT_MODE_TOL:g}).')
+  search.add_argument('--nprocs', type=int, default=128, help='Worker process count.')
+
+  op = parser.add_argument_group('operator')
+  op.add_argument('--jacobian', type=str, default='./lin_ops.h5',
+                  help='HDF5 file holding the /jacobian matrix.')
+  op.add_argument('--massmat', type=str, default='./mass_mat.h5',
+                  help='HDF5 file holding the /massmat matrix.')
+  op.add_argument('--timestep', type=float, default=None,
+                  help='Timestep of the implicit solve that produced the '
+                       'Jacobian; it must equal dt in the input deck.')
+  op.add_argument('--cache-dir', type=str, default='.',
+                  help='Directory holding the generator and Schur caches.')
+  op.add_argument('--output-dir', type=str, default='pseudospectrum',
+                  help='Directory kreiss.json is written to.')
+  op.add_argument('--run-tag', type=str, default='',
+                  help='Batch-level run identifier for metadata tracking.')
+  op.add_argument('--case-tag', type=str, default='',
+                  help='Case identifier for metadata tracking.')
+
+
 def _add_plot_arguments(parser: argparse.ArgumentParser) -> None:
   parser.add_argument('--output-dir', type=str, default='pseudospectrum',
                       help='Directory holding a finished run to render.')
@@ -179,10 +250,15 @@ def build_parser() -> argparse.ArgumentParser:
     prog='nonmodal',
     description='Nonmodal (pseudospectral) stability diagnostics.')
   sub = parser.add_subparsers(dest='command', required=True)
-  _add_run_arguments(sub.add_parser('run', help='Sample a pseudospectrum.'))
+  run = sub.add_parser('run', help='Sample a pseudospectrum.')
+  _add_run_arguments(run)
   _add_plot_arguments(sub.add_parser('plot', help='Render a finished run.'))
-  _add_pseudomode_arguments(sub.add_parser(
-    'pseudomode', help='Extract pseudomodes as restart files.'))
+  pseudomode = sub.add_parser('pseudomode', help='Extract pseudomodes as restart files.')
+  _add_pseudomode_arguments(pseudomode)
+  kreiss = sub.add_parser('kreiss', help='Bound the Kreiss constant, and so transient growth.')
+  _add_kreiss_arguments(kreiss)
+  for compute in (run, pseudomode, kreiss):
+    _add_subspace_arguments(compute)
   return parser
 
 
@@ -214,6 +290,7 @@ def _point_source(args: argparse.Namespace) -> PointSource:
 
 def run_config_from_args(args: argparse.Namespace) -> RunConfig:
   """Resolve parsed arguments into a `RunConfig`."""
+  stiffmat, cutoff, all_modes = _subspace_args(args)
   source = _point_source(args)
 
   if args.refine_points > 0 and isinstance(source, FileSource):
@@ -238,7 +315,10 @@ def run_config_from_args(args: argparse.Namespace) -> RunConfig:
     timestep=DEFAULT_TIMESTEP if args.timestep is None else args.timestep,
     n_eigvecs=DEFAULT_N_EIGVECS if args.n_eigvecs is None else args.n_eigvecs,
     run_tag=args.run_tag,
-    case_tag=args.case_tag)
+    case_tag=args.case_tag,
+    stiffmat=stiffmat,
+    resolution_cutoff=cutoff,
+    all_modes=all_modes)
 
 
 def plot_config_from_args(args: argparse.Namespace) -> PlotConfig:
@@ -266,6 +346,7 @@ def plot_config_from_args(args: argparse.Namespace) -> PlotConfig:
 
 def pseudomode_config_from_args(args: argparse.Namespace) -> PseudomodeConfig:
   """Resolve parsed arguments into a `PseudomodeConfig`."""
+  stiffmat, cutoff, all_modes = _subspace_args(args)
   return PseudomodeConfig(
     points=tuple(args.at) if args.at else (),
     jacobian=args.jacobian,
@@ -277,7 +358,31 @@ def pseudomode_config_from_args(args: argparse.Namespace) -> PseudomodeConfig:
     tol=DEFAULT_MODE_TOL if args.mode_tol is None else args.mode_tol,
     timestep=DEFAULT_TIMESTEP if args.timestep is None else args.timestep,
     run_tag=args.run_tag,
-    case_tag=args.case_tag)
+    case_tag=args.case_tag,
+    stiffmat=stiffmat,
+    resolution_cutoff=cutoff,
+    all_modes=all_modes)
+
+
+def kreiss_config_from_args(args: argparse.Namespace) -> KreissConfig:
+  """Resolve parsed arguments into a `KreissConfig`."""
+  stiffmat, cutoff, all_modes = _subspace_args(args)
+  return KreissConfig(
+    jacobian=args.jacobian,
+    massmat=args.massmat,
+    cache_dir=args.cache_dir,
+    output_dir=args.output_dir,
+    axis_points=args.axis_points,
+    offaxis_x=args.offaxis_x,
+    offaxis_y=args.offaxis_y,
+    nprocs=args.nprocs,
+    tol=DEFAULT_MODE_TOL if args.kreiss_tol is None else args.kreiss_tol,
+    timestep=DEFAULT_TIMESTEP if args.timestep is None else args.timestep,
+    run_tag=args.run_tag,
+    case_tag=args.case_tag,
+    stiffmat=stiffmat,
+    resolution_cutoff=cutoff,
+    all_modes=all_modes)
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -287,5 +392,7 @@ def main(argv: list[str] | None = None) -> None:
     plot_run(plot_config_from_args(args))
   elif args.command == 'pseudomode':
     pseudomode_run(pseudomode_config_from_args(args))
+  elif args.command == 'kreiss':
+    kreiss_run(kreiss_config_from_args(args))
   else:
     run_pipeline(run_config_from_args(args))

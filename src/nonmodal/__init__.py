@@ -22,7 +22,7 @@ os.environ.setdefault('OMP_NUM_THREADS', '1')
 os.environ.setdefault('MKL_NUM_THREADS', '1')
 os.environ.setdefault('OPENBLAS_NUM_THREADS', '1')
 
-from .config import PlotConfig, PseudomodeConfig, RunConfig  # noqa: E402
+from .config import KreissConfig, PlotConfig, PseudomodeConfig, RunConfig  # noqa: E402
 from .fields import (  # noqa: E402
   FIELD_BLOCK_COUNT,
   FIELD_NAMES,
@@ -35,13 +35,23 @@ from .fields import (  # noqa: E402
 from .io import (  # noqa: E402
   build_metadata,
   load_samples,
+  read_kreiss,
   read_metadata,
   read_pseudomodes,
   save_samples,
+  write_kreiss,
   write_metadata,
   write_pseudomodes,
 )
+from .kreiss import KreissResult, kreiss_constant  # noqa: E402
 from .matrices import HDF5Matrix, assemble_global  # noqa: E402
+from .norm import (  # noqa: E402
+  L2_COEFFICIENTS,
+  Norm,
+  norm_matrix,
+  scaled_l2_norm,
+  weighted_operator,
+)
 from .operator import (  # noqa: E402
   DEFAULT_TIMESTEP,
   eigenvectors_from_schur,
@@ -52,7 +62,7 @@ from .operator import (  # noqa: E402
   spectrum_from_schur,
   write_eigenmode_restarts,
 )
-from .pipeline import plot_run, pseudomode_run, run_pipeline  # noqa: E402
+from .pipeline import kreiss_run, plot_run, pseudomode_run, run_pipeline  # noqa: E402
 from .plotting import interpolate_to_mesh, pseudo_contours, pseudo_heatmap  # noqa: E402
 from .pseudomode import Pseudomode, pseudomode_at  # noqa: E402
 from .pseudospectrum import (  # noqa: E402
@@ -82,6 +92,8 @@ __all__ = [
   'FileSource',
   'HDF5Matrix',
   'KEPT_BLOCK_IDS',
+  'KreissConfig',
+  'KreissResult',
   'PlotConfig',
   'Pseudomode',
   'PseudomodeConfig',
@@ -95,6 +107,13 @@ __all__ = [
   'choose_contour_levels',
   'compute_pseudospectrum',
   'interpolate_to_mesh',
+  'kreiss_constant',
+  'L2_COEFFICIENTS',
+  'Norm',
+  'norm_matrix',
+  'scaled_l2_norm',
+  'weighted_operator',
+  'kreiss_run',
   'load_flat_grid_npy',
   'eigenvectors_from_schur',
   'rightmost_indices',
@@ -110,6 +129,7 @@ __all__ = [
   'pseudo_heatmap',
   'pseudomode_at',
   'pseudomode_run',
+  'read_kreiss',
   'read_metadata',
   'read_pseudomodes',
   'refine',
@@ -119,6 +139,7 @@ __all__ = [
   'sigmin_with_mode',
   'triangle_errors',
   'uniform_points',
+  'write_kreiss',
   'write_metadata',
   'write_pseudomodes',
   'write_restart_eigenvectors',
