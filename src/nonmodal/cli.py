@@ -1,14 +1,15 @@
 """Command-line interface.
 
-Four subcommands, because their requirements differ: `run` and `kreiss` need
-the HDF5 matrices and a machine with cores, `pseudomode` needs the operator but
-not the cores, `plot` needs only a finished output directory. This is the only module
+Five subcommands, because their requirements differ: `run` and `kreiss` need
+the HDF5 matrices and a machine with cores, `pseudomode` and `flux` need the
+operator but not the cores, `plot` needs only a finished output directory. This is the only module
 that touches `argparse.Namespace`. A flag that cannot take effect in the given
 mode raises rather than being ignored.
 
 * `build_parser` / `parse_args` -- the argparse surface.
 * `run_config_from_args` / `pseudomode_config_from_args` /
-  `kreiss_config_from_args` / `plot_config_from_args` -- resolve a `Namespace`
+  `kreiss_config_from_args` / `flux_config_from_args` /
+  `plot_config_from_args` -- resolve a `Namespace`
   into a frozen config.
 * `main` -- console entry point; dispatches to `pipeline`.
 """
@@ -16,11 +17,16 @@ mode raises rather than being ignored.
 import argparse
 
 from .config import (
+  DEFAULT_CURVE_POINTS,
+  DEFAULT_CURVE_TAU_MAX,
+  DEFAULT_CURVE_TAU_MIN,
+  DEFAULT_MESH_FILE,
   DEFAULT_MIN_LEVEL,
   DEFAULT_MODE_DIR,
   DEFAULT_N_EIGVECS,
   DEFAULT_NLEVELS,
   DEFAULT_REFINE_ROUNDS,
+  FluxConfig,
   KreissConfig,
   PlotConfig,
   PseudomodeConfig,
@@ -28,7 +34,7 @@ from .config import (
 )
 from .kreiss import DEFAULT_AXIS_POINTS, DEFAULT_OFFAXIS_X, DEFAULT_OFFAXIS_Y
 from .operator import DEFAULT_TIMESTEP
-from .pipeline import kreiss_run, plot_run, pseudomode_run, run_pipeline
+from .pipeline import flux_run, kreiss_run, plot_run, pseudomode_run, run_pipeline
 from .pseudospectrum import DEFAULT_MODE_TOL
 from .resolution import DEFAULT_RESOLUTION_CUTOFF
 from .sampling import (
@@ -224,6 +230,51 @@ def _add_kreiss_arguments(parser: argparse.ArgumentParser) -> None:
                   help='Case identifier for metadata tracking.')
 
 
+def _add_flux_arguments(parser: argparse.ArgumentParser) -> None:
+  obs = parser.add_argument_group('observable')
+  obs.add_argument('--harmonic', type=int, default=1,
+                   help='Fourier harmonic m of the sheet flux, k = 2 pi m / L_x (default 1).')
+  obs.add_argument('--sheet-z', type=float, default=0.0,
+                   help='The line z the flux is measured on [m] (default 0, the sheet). '
+                        'It must be a line of element edges.')
+  obs.add_argument('--mesh-file', type=str, default=DEFAULT_MESH_FILE,
+                   help=f'OFT 2D plot file whose plotting mesh places each degree of '
+                        f'freedom (default {DEFAULT_MESH_FILE}, written by the '
+                        f'export run).')
+
+  times = parser.add_argument_group('times, in Alfven times from the deck')
+  times.add_argument('--target-tau', type=float, action='append', default=None,
+                     metavar='T', dest='target_tau',
+                     help='Build the flux-optimal seed for this time. Repeat for several; '
+                          'omit to compute only the gain curve.')
+  times.add_argument('--curve-tau-min', type=float, default=DEFAULT_CURVE_TAU_MIN,
+                     help=f'Start of the log-spaced gain curve G(t) (default '
+                          f'{DEFAULT_CURVE_TAU_MIN:g}).')
+  times.add_argument('--curve-tau-max', type=float, default=DEFAULT_CURVE_TAU_MAX,
+                     help=f'End of the gain curve (default {DEFAULT_CURVE_TAU_MAX:g}).')
+  times.add_argument('--curve-points', type=int, default=DEFAULT_CURVE_POINTS,
+                     help=f'Points on the gain curve (default {DEFAULT_CURVE_POINTS}).')
+
+  op = parser.add_argument_group('operator')
+  op.add_argument('--jacobian', type=str, default='./lin_ops.h5',
+                  help='HDF5 file holding the /jacobian matrix.')
+  op.add_argument('--massmat', type=str, default='./mass_mat.h5',
+                  help='HDF5 file holding the /massmat matrix; its local-to-global map '
+                       'also places the plot points.')
+  op.add_argument('--timestep', type=float, default=None,
+                  help='Timestep of the implicit solve that produced the '
+                       'Jacobian; it must equal dt in the input deck.')
+  op.add_argument('--cache-dir', type=str, default='.',
+                  help='Directory holding the generator and Schur caches. The seeds '
+                       'need the Schur vectors.')
+  op.add_argument('--output-dir', type=str, default='flux',
+                  help='Directory flux.json, the curves and the seed restarts go to.')
+  op.add_argument('--run-tag', type=str, default='',
+                  help='Batch-level run identifier for metadata tracking.')
+  op.add_argument('--case-tag', type=str, default='',
+                  help='Case identifier for metadata tracking.')
+
+
 def _add_plot_arguments(parser: argparse.ArgumentParser) -> None:
   parser.add_argument('--output-dir', type=str, default='pseudospectrum',
                       help='Directory holding a finished run to render.')
@@ -257,7 +308,10 @@ def build_parser() -> argparse.ArgumentParser:
   _add_pseudomode_arguments(pseudomode)
   kreiss = sub.add_parser('kreiss', help='Bound the Kreiss constant, and so transient growth.')
   _add_kreiss_arguments(kreiss)
-  for compute in (run, pseudomode, kreiss):
+  flux = sub.add_parser(
+    'flux', help='Initial conditions that maximise reconnected flux at given times.')
+  _add_flux_arguments(flux)
+  for compute in (run, pseudomode, kreiss, flux):
     _add_subspace_arguments(compute)
   return parser
 
@@ -385,6 +439,29 @@ def kreiss_config_from_args(args: argparse.Namespace) -> KreissConfig:
     all_modes=all_modes)
 
 
+def flux_config_from_args(args: argparse.Namespace) -> FluxConfig:
+  """Resolve parsed arguments into a `FluxConfig`."""
+  stiffmat, cutoff, all_modes = _subspace_args(args)
+  return FluxConfig(
+    targets_tau=tuple(args.target_tau) if args.target_tau else (),
+    curve_tau_min=args.curve_tau_min,
+    curve_tau_max=args.curve_tau_max,
+    curve_points=args.curve_points,
+    harmonic=args.harmonic,
+    sheet_z=args.sheet_z,
+    mesh_file=args.mesh_file,
+    jacobian=args.jacobian,
+    massmat=args.massmat,
+    cache_dir=args.cache_dir,
+    output_dir=args.output_dir,
+    timestep=DEFAULT_TIMESTEP if args.timestep is None else args.timestep,
+    run_tag=args.run_tag,
+    case_tag=args.case_tag,
+    stiffmat=stiffmat,
+    resolution_cutoff=cutoff,
+    all_modes=all_modes)
+
+
 def main(argv: list[str] | None = None) -> None:
   """CLI entry point."""
   args = parse_args(argv)
@@ -394,5 +471,7 @@ def main(argv: list[str] | None = None) -> None:
     pseudomode_run(pseudomode_config_from_args(args))
   elif args.command == 'kreiss':
     kreiss_run(kreiss_config_from_args(args))
+  elif args.command == 'flux':
+    flux_run(flux_config_from_args(args))
   else:
     run_pipeline(run_config_from_args(args))

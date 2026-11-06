@@ -7,6 +7,7 @@ run fails before any matrix is loaded.
 * `RunConfig` -- everything `nonmodal run` needs.
 * `PseudomodeConfig` -- everything `nonmodal pseudomode` needs.
 * `KreissConfig` -- everything `nonmodal kreiss` needs.
+* `FluxConfig` -- everything `nonmodal flux` needs.
 * `PlotConfig` -- everything `nonmodal plot` needs.
 """
 
@@ -24,6 +25,11 @@ DEFAULT_NLEVELS = 16
 DEFAULT_MIN_LEVEL = 1e-7
 DEFAULT_PLOT_MESH = 400
 DEFAULT_MODE_DIR = 'pseudomodes'
+DEFAULT_CURVE_TAU_MIN = 0.01
+DEFAULT_CURVE_TAU_MAX = 1000.0
+DEFAULT_CURVE_POINTS = 241
+#: Where OFT's plotting pass puts the 2D plot file, relative to the run directory.
+DEFAULT_MESH_FILE = './all/oft_xdmf.0001.h5'
 
 
 @dataclass(frozen=True)
@@ -149,6 +155,55 @@ class KreissConfig:
       raise ValueError('nprocs must be >= 1')
     if self.tol <= 0.0:
       raise ValueError('kreiss-tol must be positive')
+    if self.timestep <= 0.0:
+      raise ValueError('timestep must be positive')
+    if not 0.0 < self.resolution_cutoff <= 1.0:
+      raise ValueError('resolution-cutoff must be in (0, 1]')
+
+
+@dataclass(frozen=True)
+class FluxConfig:
+  """Everything `nonmodal flux` needs.
+
+  Times are in Alfven times, read from the deck, since that is how targets are
+  chosen; outputs record seconds as well.
+  """
+
+  #: Times to build optimal seeds for [tau_A]; may be empty for the curve alone.
+  targets_tau: tuple[float, ...] = ()
+  #: Log-spaced G(t) curve from `curve_tau_min` to `curve_tau_max` [tau_A].
+  curve_tau_min: float = DEFAULT_CURVE_TAU_MIN
+  curve_tau_max: float = DEFAULT_CURVE_TAU_MAX
+  curve_points: int = DEFAULT_CURVE_POINTS
+  #: Fourier harmonic m of the observable, k = 2 pi m / L_x.
+  harmonic: int = 1
+  #: The line the flux is measured on [m]; must be a line of element edges.
+  sheet_z: float = 0.0
+  #: OFT 2D plot file whose plotting mesh gives the DOF positions.
+  mesh_file: str = DEFAULT_MESH_FILE
+  jacobian: str = './lin_ops.h5'
+  massmat: str = './mass_mat.h5'
+  cache_dir: str = '.'
+  output_dir: str = 'flux'
+  timestep: float = DEFAULT_TIMESTEP
+  #: Laplacian stiffness of the export, which decides which modes are resolved.
+  stiffmat: str = './stiff_mat.h5'
+  #: Keep modes whose worst field has k_f / k_max below this.
+  resolution_cutoff: float = DEFAULT_RESOLUTION_CUTOFF
+  #: Analyse all of L, unresolved grid modes included.
+  all_modes: bool = False
+  run_tag: str = ''
+  case_tag: str = ''
+
+  def __post_init__(self) -> None:
+    if any(t <= 0.0 for t in self.targets_tau):
+      raise ValueError('target-tau must be positive')
+    if self.curve_tau_min <= 0.0 or self.curve_tau_max <= self.curve_tau_min:
+      raise ValueError('need 0 < curve-tau-min < curve-tau-max')
+    if self.curve_points < 2:
+      raise ValueError('curve-points must be >= 2')
+    if self.harmonic < 1:
+      raise ValueError('harmonic must be >= 1')
     if self.timestep <= 0.0:
       raise ValueError('timestep must be positive')
     if not 0.0 < self.resolution_cutoff <= 1.0:

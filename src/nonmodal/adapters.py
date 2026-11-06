@@ -18,6 +18,9 @@ with `&xmhd_options`. Both carry the same keys.
   Prandtl numbers, in whichever units the deck's driver used.
 * `read_field_scales` -- each field's typical size in OFT's stored units,
   which weights the scaled L2 norm.
+* `read_element_order` -- the Lagrange order of the field basis.
+* `read_dof_coordinates` -- where each scalar degree of freedom sits, from
+  OFT's plot output.
 """
 
 import math
@@ -25,6 +28,10 @@ import os
 import re
 from dataclasses import asdict, dataclass
 from typing import Any
+
+import h5py
+import numpy as np
+from numpy.typing import NDArray
 
 #: Deck filenames, newest driver first.
 INPUT_DECK_NAMES = ('oft.in', 'oft_surf.in')
@@ -257,3 +264,90 @@ def read_field_scales(deck_path: str) -> FieldScales:
     flux_T_m=field * value('lam_b'),
     field_T=field,
   )
+
+
+def read_element_order(deck_path: str) -> int:
+  """The Lagrange order of the field basis (`order` in the simulation group)."""
+  order = _read_simulation_float(deck_path, 'order')
+  if order < 1 or order != int(order):
+    raise ValueError(f'order must be a positive integer, got {order}')
+  return int(order)
+
+
+#: Group of OFT's 2D plot file holding the plotting mesh.
+PLOT_MESH_GROUP = 'xmhd_2d/smesh'
+
+
+@dataclass(frozen=True)
+class DofCoordinates:
+  """Position of every scalar Lagrange degree of freedom, in global numbering.
+
+  Every field block uses the same scalar basis, so one set serves all seven.
+  `x` lies in `[x_min, x_min + period)`: a node on the periodic seam appears
+  once, at the left edge.
+  """
+
+  x: NDArray[np.float64]
+  z: NDArray[np.float64]
+  x_min: float
+  #: Length of the periodic direction [m].
+  period: float
+  plot_file: str
+
+
+def read_dof_coordinates(
+  plot_file: str,
+  scalar_matrix: str,
+  matrix_name: str = '/massmat',
+) -> DofCoordinates:
+  """Coordinates of the scalar Lagrange DOFs, from OFT's plot output.
+
+  OFT plots a Lagrange field at its own nodes: the points of
+  `xmhd_2d/smesh/R` are the local nodes, in local order, with the periodic
+  seam duplicated. A scalar matrix export's `lg` maps those local nodes to
+  global DOFs, so scattering `R` through `lg` places every DOF. Verified on
+  the 20x6z export, where the equilibrium flux at these points matches the
+  analytic Harris profile to 6e-5 relative.
+
+  The correspondence is checked rather than trusted: the point count must
+  equal the local size, and every local copy of a global DOF must agree --
+  in z exactly, in x up to one period.
+  """
+  with h5py.File(plot_file, 'r') as f:
+    if PLOT_MESH_GROUP not in f:
+      raise ValueError(f'{plot_file} has no {PLOT_MESH_GROUP}; is it a 2D MUG plot file?')
+    points = np.asarray(f[f'{PLOT_MESH_GROUP}/R'], dtype=np.float64)
+  with h5py.File(scalar_matrix, 'r') as f:
+    local_to_global = np.asarray(f[f'{matrix_name}/lg'], dtype=np.int64) - 1
+    n_global = int(f[f'{matrix_name}/nrg'][0])
+
+  if points.shape[0] != local_to_global.size:
+    raise ValueError(
+      f'{plot_file} has {points.shape[0]} plot points but {scalar_matrix} has '
+      f'{local_to_global.size} local nodes; the plot is not at the basis order')
+
+  x_raw, z_raw = points[:, 0], points[:, 1]
+  x_min = float(x_raw.min())
+  period = float(x_raw.max()) - x_min
+  if period <= 0.0:
+    raise ValueError('the plot points span no length in x')
+  # The plot stores single precision, so "equal" means within its rounding.
+  tol = 1e-5 * max(period, float(np.ptp(z_raw)))
+
+  x = np.full(n_global, np.nan)
+  z = np.full(n_global, np.nan)
+  x[local_to_global] = x_raw
+  z[local_to_global] = z_raw
+  if np.isnan(x).any():
+    raise ValueError(f'{int(np.isnan(x).sum())} global DOFs have no plot point')
+  if np.abs(z[local_to_global] - z_raw).max() > tol:
+    raise ValueError('copies of one DOF disagree in z: plot points are not the DOF nodes')
+  # Copies of a seam DOF differ by exactly one period in x.
+  offset = x[local_to_global] - x_raw
+  if np.abs(offset - period * np.round(offset / period)).max() > tol:
+    raise ValueError('copies of one DOF disagree in x: plot points are not the DOF nodes')
+
+  # Fold the seam onto the left edge, so each node appears once per period.
+  folded = x_min + np.mod(x - x_min + 0.5 * tol, period) - 0.5 * tol
+  return DofCoordinates(
+    x=folded, z=z, x_min=x_min, period=period, plot_file=os.path.abspath(plot_file))

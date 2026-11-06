@@ -23,6 +23,7 @@ uv run pytest tests/test_pseudospectrum.py -k closed_form   # a single test
 uv run nonmodal run --help                       # sample a pseudospectrum
 uv run nonmodal plot --help                      # render a finished run
 uv run nonmodal kreiss --help                    # bound the Kreiss constant
+uv run nonmodal flux --help                      # flux-optimal initial conditions
 uv run python -m nonmodal --help                 # equivalent
 ```
 
@@ -119,7 +120,7 @@ no caches, which is why `run` also saves `pseudo_eigvals.npy` for the overlay.
 
 | Module | Responsibility |
 |---|---|
-| `adapters.py` | OFT-format interop: the input deck (`oft.in` / `oft_surf.in`), `gamma`, `eta`, `dt`, physical scales |
+| `adapters.py` | OFT-format interop: the input deck (`oft.in` / `oft_surf.in`), `gamma`, `eta`, `dt`, physical scales, DOF coordinates from the plot file |
 | `matrices.py` | `HDF5Matrix`, `assemble_global` (numba) |
 | `fields.py` | 7-field block layout, reduction mask, restart output |
 | `operator.py` | reduced generator `L`, Schur factor, eigenvalues and eigenvectors from it, caching |
@@ -132,6 +133,7 @@ no caches, which is why `run` also saves `pseudo_eigvals.npy` for the overlay.
 | `kreiss.py` | Kreiss lower bound: real-axis search, saddle and off-axis checks |
 | `resolution.py` | exported Laplacian `/stiffmat`, per-mode per-field wavenumbers, `ztrevc` |
 | `subspace.py` | restriction to resolved modes: `ztrsen` reorder, conjugate closure, record |
+| `flux.py` | sheet-flux observable, one-step adjoint optimal seeds, gain curve, predictions |
 | `io.py` | run metadata, flat sample IO |
 | `config.py` | frozen `RunConfig` / `PlotConfig` / `PseudomodeConfig` / `KreissConfig` |
 | `pipeline.py` | `run_pipeline`, `plot_run`, `pseudomode_run`, `kreiss_run` |
@@ -293,6 +295,21 @@ appear there as filenames — but its functions are still named for what they do
   holds kinematic constant (~6x apart in the low-density wings).
   `read_physical_scales` picks the conversion by the deck's group and records which
   in `run_metadata.json`, so tau_A, S and Pm are right for both generations.
+- **DOF positions come from OFT's plot file, not the matrices.** `nonmodal flux`
+  needs to know where each Lagrange DOF sits, and nothing in `lin_ops.h5` says.
+  OFT plots a Lagrange field at its own nodes, so `xmhd_2d/smesh/R` in
+  `all/oft_xdmf.0001.h5` lists the *local* nodes in local order (periodic seam
+  duplicated: 2239 points for 2220 DOFs on 20x6z), and the scalar mass export's
+  `lg` maps them to global DOFs. `read_dof_coordinates` checks the point count and
+  that every seam copy agrees; on 20x6z the equilibrium psi at those points matches
+  the analytic Harris profile to 6e-5. A plot made at another order would fail the
+  count check. Coordinates are float32 there (~1e-7 m).
+- **The flux observable needs the sheet to be a line of element edges.** It is the
+  `cos(kx)` Fourier amplitude of psi along `z = sheet_z`, integrated exactly on the
+  1D trace, so the line's node count must be a multiple of the order. Harris meshes
+  put a cell boundary at z = 0. It returns OFT's own seed amplitude (`-delta psi0`)
+  to 2.5e-6, the seed's projection error. Gains are divided by `psi0 lam_b`; seeds
+  are written at unit scaled-L2 norm, so scale them with `init_rst_scale`.
 - **The Kreiss search assumes the supremum is on the real axis, and checks it.**
   This is our heuristic, not a published result: a real operator's resolvent norm
   is symmetric in `Im z`, so the axis is stationary there, but that makes it a

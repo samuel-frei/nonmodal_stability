@@ -3,13 +3,24 @@
 import pytest
 
 from nonmodal.cli import (
+  flux_config_from_args,
   kreiss_config_from_args,
   parse_args,
   plot_config_from_args,
   pseudomode_config_from_args,
   run_config_from_args,
 )
-from nonmodal.config import KreissConfig, PlotConfig, PseudomodeConfig, RunConfig
+from nonmodal.config import (
+  DEFAULT_CURVE_POINTS,
+  DEFAULT_CURVE_TAU_MAX,
+  DEFAULT_CURVE_TAU_MIN,
+  DEFAULT_MESH_FILE,
+  FluxConfig,
+  KreissConfig,
+  PlotConfig,
+  PseudomodeConfig,
+  RunConfig,
+)
 from nonmodal.kreiss import DEFAULT_AXIS_POINTS, DEFAULT_OFFAXIS_X, DEFAULT_OFFAXIS_Y
 from nonmodal.pseudospectrum import DEFAULT_MODE_TOL
 from nonmodal.resolution import DEFAULT_RESOLUTION_CUTOFF
@@ -266,6 +277,54 @@ def test_kreiss_rejects_out_of_range_values(flags: list[str], message: str) -> N
     _kreiss(*flags)
 
 
+# --- flux -----------------------------------------------------------------
+
+
+def _flux(*extra: str) -> FluxConfig:
+  return flux_config_from_args(parse_args(['flux', *extra]))
+
+
+def test_flux_defaults_are_fully_resolved() -> None:
+  config = _flux()
+  assert config.targets_tau == ()
+  assert (config.curve_tau_min, config.curve_tau_max, config.curve_points) == (
+    DEFAULT_CURVE_TAU_MIN, DEFAULT_CURVE_TAU_MAX, DEFAULT_CURVE_POINTS)
+  assert (config.harmonic, config.sheet_z) == (1, 0.0)
+  assert config.mesh_file == DEFAULT_MESH_FILE
+  assert config.output_dir == 'flux'
+  assert all(getattr(config, f) is not None for f in config.__dataclass_fields__)
+
+
+def test_every_flux_flag_reaches_its_field() -> None:
+  config = _flux(
+    '--target-tau', '10', '--target-tau', '30', '--curve-tau-min', '0.1',
+    '--curve-tau-max', '50', '--curve-points', '11', '--harmonic', '2', '--sheet-z', '0.5',
+    '--mesh-file', 'p.h5', '--jacobian', 'j.h5', '--massmat', 'm.h5', '--timestep', '2e-7',
+    '--cache-dir', 'cache', '--output-dir', 'out', '--run-tag', 'r', '--case-tag', 'c')
+  assert config.targets_tau == (10.0, 30.0)
+  assert (config.curve_tau_min, config.curve_tau_max, config.curve_points) == (0.1, 50.0, 11)
+  assert (config.harmonic, config.sheet_z, config.mesh_file) == (2, 0.5, 'p.h5')
+  assert (config.jacobian, config.massmat) == ('j.h5', 'm.h5')
+  assert config.timestep == pytest.approx(2e-7)
+  assert (config.cache_dir, config.output_dir) == ('cache', 'out')
+  assert (config.run_tag, config.case_tag) == ('r', 'c')
+
+
+@pytest.mark.parametrize(
+  ('flags', 'message'),
+  [
+    (['--target-tau', '0'], 'target-tau must be positive'),
+    (['--curve-tau-min', '5', '--curve-tau-max', '5'], 'need 0 < curve-tau-min < curve-tau-max'),
+    (['--curve-tau-min', '0'], 'need 0 < curve-tau-min < curve-tau-max'),
+    (['--curve-points', '1'], 'curve-points must be >= 2'),
+    (['--harmonic', '0'], 'harmonic must be >= 1'),
+  ],
+)
+def test_flux_rejects_out_of_range_values(flags: list[str], message: str) -> None:
+  with pytest.raises(ValueError, match=message):
+    _flux(*flags)
+
+
 # --- subspace restriction ---------------------------------------------------
 
 
@@ -274,6 +333,7 @@ _COMPUTE = {
   'pseudomode': (lambda *a: pseudomode_config_from_args(parse_args(['pseudomode', *a])),
                  ('--at', '1+1j')),
   'kreiss': (_kreiss, ()),
+  'flux': (_flux, ()),
 }
 
 

@@ -22,7 +22,14 @@ os.environ.setdefault('OMP_NUM_THREADS', '1')
 os.environ.setdefault('MKL_NUM_THREADS', '1')
 os.environ.setdefault('OPENBLAS_NUM_THREADS', '1')
 
-from .config import KreissConfig, PlotConfig, PseudomodeConfig, RunConfig  # noqa: E402
+from .adapters import DofCoordinates, read_dof_coordinates  # noqa: E402
+from .config import (  # noqa: E402
+  FluxConfig,
+  KreissConfig,
+  PlotConfig,
+  PseudomodeConfig,
+  RunConfig,
+)
 from .fields import (  # noqa: E402
   FIELD_BLOCK_COUNT,
   FIELD_NAMES,
@@ -32,13 +39,25 @@ from .fields import (  # noqa: E402
   write_restart_eigenvectors,
   write_restart_modes,
 )
+from .flux import (  # noqa: E402
+  FluxFunctional,
+  FluxSeed,
+  adjoint_vector,
+  flux_gain_curve,
+  flux_optimal_seed,
+  flux_response,
+  sheet_flux_functional,
+  sheet_flux_weights,
+)
 from .io import (  # noqa: E402
   build_metadata,
   load_samples,
+  read_flux,
   read_kreiss,
   read_metadata,
   read_pseudomodes,
   save_samples,
+  write_flux,
   write_kreiss,
   write_metadata,
   write_pseudomodes,
@@ -62,7 +81,7 @@ from .operator import (  # noqa: E402
   spectrum_from_schur,
   write_eigenmode_restarts,
 )
-from .pipeline import kreiss_run, plot_run, pseudomode_run, run_pipeline  # noqa: E402
+from .pipeline import flux_run, kreiss_run, plot_run, pseudomode_run, run_pipeline  # noqa: E402
 from .plotting import interpolate_to_mesh, pseudo_contours, pseudo_heatmap  # noqa: E402
 from .pseudomode import Pseudomode, pseudomode_at  # noqa: E402
 from .pseudospectrum import (  # noqa: E402
@@ -87,9 +106,13 @@ __version__ = '0.1.0'
 __all__ = [
   'Bounds',
   'DEFAULT_TIMESTEP',
+  'DofCoordinates',
   'FIELD_BLOCK_COUNT',
   'FIELD_NAMES',
   'FileSource',
+  'FluxConfig',
+  'FluxFunctional',
+  'FluxSeed',
   'HDF5Matrix',
   'KEPT_BLOCK_IDS',
   'KreissConfig',
@@ -100,12 +123,17 @@ __all__ = [
   'RectangularSource',
   'RunConfig',
   'SpectrumSource',
+  'adjoint_vector',
   'aligned_phase',
   'assemble_global',
   'build_metadata',
   'build_reduction_mapping',
   'choose_contour_levels',
   'compute_pseudospectrum',
+  'flux_gain_curve',
+  'flux_optimal_seed',
+  'flux_response',
+  'flux_run',
   'interpolate_to_mesh',
   'kreiss_constant',
   'L2_COEFFICIENTS',
@@ -129,6 +157,8 @@ __all__ = [
   'pseudo_heatmap',
   'pseudomode_at',
   'pseudomode_run',
+  'read_dof_coordinates',
+  'read_flux',
   'read_kreiss',
   'read_metadata',
   'read_pseudomodes',
@@ -136,9 +166,12 @@ __all__ = [
   'run_pipeline',
   'sample_sigmin',
   'save_samples',
+  'sheet_flux_functional',
+  'sheet_flux_weights',
   'sigmin_with_mode',
   'triangle_errors',
   'uniform_points',
+  'write_flux',
   'write_kreiss',
   'write_metadata',
   'write_pseudomodes',

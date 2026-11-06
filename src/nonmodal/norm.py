@@ -69,6 +69,16 @@ class Norm:
       return vectors
     return np.asarray(scipy.linalg.solve_triangular(self.factor, vectors, lower=False))
 
+  def dual(self, functional: NDArray[Any]) -> NDArray[Any]:
+    """A linear functional `c @ x` on coefficients, as `g @ y` on this norm's coordinates.
+
+    `c @ x = c @ R^-1 y`, so `g = R^-T c`.
+    """
+    if self.factor is None:
+      return functional
+    return np.asarray(
+      scipy.linalg.solve_triangular(self.factor, functional, trans='T', lower=False))
+
   def cache_name(self, filename: str) -> str:
     """`filename` tagged with this norm, so factorisations never share a name."""
     if not self.cache_tag:

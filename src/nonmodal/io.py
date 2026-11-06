@@ -12,6 +12,7 @@ modes, unless `--all-modes`; `spectrum.npy` is always the full spectrum of `L`.
 * `write_pseudomodes` / `read_pseudomodes` -- the pseudomode sidecar.
 * `write_eigenmodes` / `read_eigenmodes` -- which eigenvalue each restart holds.
 * `write_kreiss` / `read_kreiss` -- the Kreiss bound and how far to trust it.
+* `write_flux` / `read_flux` -- the flux-optimal seeds and their provenance.
 """
 
 import json
@@ -34,6 +35,9 @@ METADATA_FILE = 'run_metadata.json'
 PSEUDOMODE_FILE = 'pseudomodes.json'
 EIGENMODE_FILE = 'eigenmodes.json'
 KREISS_FILE = 'kreiss.json'
+FLUX_FILE = 'flux.json'
+#: Gain curve and per-seed forward predictions, in seconds and tau_A.
+FLUX_ARRAYS_FILE = 'flux_curves.npz'
 #: What the sampled operator is; eigenvalues and z are growth rates in 1/s.
 OPERATOR_DESCRIPTION = (
   'generator L = M^-1 (M - J)/dt of du/dt = L u; eigenvalues and sample points '
@@ -144,6 +148,16 @@ def write_kreiss(output_dir: str, payload: dict[str, Any]) -> None:
 def read_kreiss(output_dir: str) -> dict[str, Any]:
   """Read back the Kreiss sidecar."""
   return _read_json(output_dir, KREISS_FILE)
+
+
+def write_flux(output_dir: str, payload: dict[str, Any]) -> None:
+  """Persist the flux-optimal seeds, the gain curve's summary and the provenance."""
+  _write_json(output_dir, FLUX_FILE, payload, 'flux result')
+
+
+def read_flux(output_dir: str) -> dict[str, Any]:
+  """Read back the flux sidecar."""
+  return _read_json(output_dir, FLUX_FILE)
 
 
 def save_samples(

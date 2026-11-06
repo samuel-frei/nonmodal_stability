@@ -95,9 +95,9 @@ by `|grad psi|^2`, and needs matrices OFT does not export yet.
 
 ## Command-line use
 
-There are four subcommands, because their requirements differ. `run` and `kreiss`
-need the HDF5 matrices and a machine with cores; `pseudomode` needs the operator but
-not the cores; `plot` needs only a finished output directory.
+There are five subcommands, because their requirements differ. `run` and `kreiss`
+need the HDF5 matrices and a machine with cores; `pseudomode` and `flux` need the
+operator but not the cores; `plot` needs only a finished output directory.
 
 ```bash
 # On the cluster, from a directory containing the input files.
@@ -117,6 +117,11 @@ uv run nonmodal pseudomode --at 5e5-2.4e4j --at -1e6+3e5j --phases 8
 ```bash
 # A rigorous lower bound on the Kreiss constant, and so on transient growth:
 uv run nonmodal kreiss --nprocs 32
+```
+
+```bash
+# Initial conditions that maximise reconnected flux at given times [tau_A]:
+uv run nonmodal flux --target-tau 10 --target-tau 30
 ```
 
 `python -m nonmodal` works identically. `cases/harris_linear_20x6z/ps1.sbatch` runs
@@ -165,6 +170,23 @@ The per-mode wavenumbers are cached beside the Schur factor
 (`mode_resolution_l2s.npz`), so trying another cutoff costs only the reorder.
 `run_metadata.json`, `pseudomodes.json` and `kreiss.json` record the cutoff,
 `k_max` per field, and the kept eigenvalues under `subspace`.
+
+### Flux-optimal initial conditions
+
+`nonmodal flux` targets reconnection rather than energy. The observable is the
+`cos(kx)` Fourier amplitude of the flux perturbation along the sheet,
+`F(u) = (2/L_x) int psi(x, z_s) cos(kx) dx`, half the reconnected flux for a single
+harmonic, divided by `psi0 lam_b`. Because `F` is linear in the state, the
+unit-norm initial condition that maximises it at time `t` is one adjoint solve,
+`u0 ~ N^-1 e^{t L^T} c` (Cauchy-Schwarz in the N inner product), with no
+optimisation loop. On the resolved subspace that is a small matrix exponential, so
+the command also writes the whole gain curve `G(t)`.
+
+Outputs in `--output-dir` (default `flux/`): `flux.json` (observable, gain curve
+peak, each seed's gain and predicted peak), `flux_curves.npz` (`G(t)` and each
+seed's forward prediction of `F(t)` and `||u(t)||_N`), and `seeds/xmhd2d_*.rst`,
+one unit-norm seed per `--target-tau`, ready for OFT's `init_rst`. DOF positions
+come from OFT's plot file (`--mesh-file`, default `./all/oft_xdmf.0001.h5`).
 
 ### Pseudomodes
 

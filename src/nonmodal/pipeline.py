@@ -2,6 +2,8 @@
 
 * `run_pipeline` -- reduce, factorise, sample, write out a pseudospectrum.
 * `pseudomode_run` -- extract modes at given points, write them as restarts.
+* `kreiss_run` -- bound the Kreiss constant, write `kreiss.json`.
+* `flux_run` -- flux-optimal initial conditions and the flux gain curve.
 * `plot_run` -- render a finished run directory, without the operator.
 """
 
@@ -13,16 +15,31 @@ from typing import Any, overload
 import numpy as np
 from numpy.typing import NDArray
 
-from .adapters import find_input_deck, read_physical_scales
-from .config import KreissConfig, PlotConfig, PseudomodeConfig, RunConfig
+from .adapters import (
+  find_input_deck,
+  read_dof_coordinates,
+  read_element_order,
+  read_field_scales,
+  read_physical_scales,
+)
+from .config import FluxConfig, KreissConfig, PlotConfig, PseudomodeConfig, RunConfig
 from .fields import build_reduction_mapping, write_restart_modes
+from .flux import (
+  adjoint_vector,
+  flux_gain_curve,
+  flux_optimal_seed,
+  flux_response,
+  sheet_flux_functional,
+)
 from .io import (
+  FLUX_ARRAYS_FILE,
   OPERATOR_DESCRIPTION,
   build_metadata,
   load_samples,
   save_samples,
   save_spectrum,
   write_eigenmodes,
+  write_flux,
   write_kreiss,
   write_metadata,
   write_pseudomodes,
@@ -155,7 +172,7 @@ def run_pipeline(config: RunConfig) -> None:
     subspace=subspace.describe()))
 
 
-_Compute = RunConfig | PseudomodeConfig | KreissConfig
+_Compute = RunConfig | PseudomodeConfig | KreissConfig | FluxConfig
 
 
 def _resolution_cached(
@@ -300,6 +317,110 @@ def kreiss_run(config: KreissConfig) -> dict[str, Any]:
   if result.axis_at_upper_end:
     print('note: the real-axis maximum is at the scan\'s upper end; K -> 1 there, as for '
           'a (nearly) normal operator', flush=True)
+  return payload
+
+
+def flux_run(config: FluxConfig) -> dict[str, Any]:
+  """Flux-optimal initial conditions: the gain curve, seeds as restarts, predictions."""
+  nr_local, keep_global = build_reduction_mapping(config.jacobian)
+  os.makedirs(config.output_dir, exist_ok=True)
+
+  generator = load_or_compute_generator(
+    config.jacobian, config.massmat, keep_global, config.cache_dir, config.timestep)
+  norm = scaled_l2_norm(config.jacobian, config.massmat, keep_global)
+  schur_t, schur_z = load_or_compute_schur_vectors(generator, config.cache_dir, norm)
+  del generator
+  schur_t, schur_z, subspace = _restrict(config, schur_t, schur_z, norm, keep_global)
+  if not subspace.conjugate_closed:
+    print('warning: the kept modes are not conjugate-closed, so the optimal seeds are '
+          'complex; their real parts are written, and imag_fraction says how much was lost',
+          flush=True)
+
+  deck = find_input_deck(config.jacobian)
+  coords = read_dof_coordinates(config.mesh_file, config.massmat)
+  functional = sheet_flux_functional(
+    coords, read_element_order(deck), keep_global,
+    scale=read_field_scales(deck).flux_T_m,
+    harmonic=config.harmonic, sheet_z=config.sheet_z)
+  adjoint = adjoint_vector(functional, schur_z, norm)
+  print(f'sheet flux: harmonic {functional.harmonic} (k = {functional.wavenumber:.4g} /m) '
+        f'on z = {functional.sheet_z:g}, {functional.n_nodes} nodes; '
+        f'best instantaneous flux G(0) = {np.linalg.norm(adjoint):.4g}', flush=True)
+
+  scales = _physical_scales(config.jacobian)
+  tau_a = float(scales['alfven_time_s'])
+  curve_tau = np.geomspace(config.curve_tau_min, config.curve_tau_max, config.curve_points)
+  gain = flux_gain_curve(schur_t, adjoint, curve_tau * tau_a)
+  peak = int(np.argmax(gain))
+  print(f'flux gain curve: max G = {gain[peak]:.4g} at t = {curve_tau[peak]:.4g} tau_A',
+        flush=True)
+
+  seeds = [flux_optimal_seed(schur_t, schur_z, adjoint, t * tau_a, norm)
+           for t in config.targets_tau]
+  prediction_tau = np.concatenate([[0.0], curve_tau])
+  arrays: dict[str, Any] = {
+    'curve_t_tau': curve_tau, 'curve_t_s': curve_tau * tau_a, 'gain': gain,
+    'gain_at_zero': np.array([np.linalg.norm(adjoint)]),
+    'prediction_t_tau': prediction_tau, 'prediction_t_s': prediction_tau * tau_a,
+    'targets_tau': np.asarray(config.targets_tau, dtype=float),
+  }
+  for i, seed in enumerate(seeds):
+    flux, size = flux_response(schur_t, adjoint, seed.schur_vector, prediction_tau * tau_a)
+    arrays[f'seed{i}_flux'], arrays[f'seed{i}_norm'] = flux, size
+  del schur_t, schur_z
+  np.savez(os.path.join(config.output_dir, FLUX_ARRAYS_FILE), **arrays)
+
+  paths: list[str] = []
+  if seeds:
+    seed_dir = os.path.join(config.output_dir, 'seeds')
+    # Real vectors, so write_restart_modes keeps their sign (phase 0).
+    paths = write_restart_modes(
+      np.column_stack([s.vector for s in seeds]).astype(np.complex128),
+      keep_global, nr_local, seed_dir, phases=1)
+    print(f'wrote {len(paths)} seed restart files to {os.path.abspath(seed_dir)}', flush=True)
+
+  seed_records = []
+  for i, (target, seed, path) in enumerate(zip(config.targets_tau, seeds, paths, strict=True)):
+    flux = arrays[f'seed{i}_flux']
+    best = int(np.argmax(flux))
+    seed_records.append({
+      **seed.describe(),
+      'target_time_tau_A': float(target),
+      'file': os.path.relpath(path, config.output_dir),
+      'flux_at_zero': float(flux[0]),
+      'predicted_peak_flux': float(flux[best]),
+      'predicted_peak_time_tau_A': float(prediction_tau[best]),
+    })
+    print(f'seed for t = {target:g} tau_A: G = {seed.gain:.4g} (real seed {seed.achieved:.4g}, '
+          f'imag fraction {seed.imag_fraction:.1e}); F(0) = {flux[0]:.3g}', flush=True)
+
+  payload: dict[str, Any] = {
+    'created_utc': datetime.now(UTC).isoformat(timespec='seconds').replace('+00:00', 'Z'),
+    'hostname': socket.gethostname(),
+    'cwd': os.getcwd(),
+    'slurm_job_id': os.environ.get('SLURM_JOB_ID', ''),
+    'run_tag': config.run_tag,
+    'case_tag': config.case_tag,
+    'inputs': {
+      'jacobian': os.path.abspath(config.jacobian),
+      'massmat': os.path.abspath(config.massmat),
+      'mesh_file': coords.plot_file,
+      'cache_dir': os.path.abspath(config.cache_dir),
+    },
+    'operator': OPERATOR_DESCRIPTION,
+    'norm': norm.describe(),
+    'subspace': subspace.describe(),
+    'physical_scales': scales,
+    'observable': functional.describe(),
+    'method': 'one adjoint solve per target: u0 ~ N^-1 e^{t L^T} c, exact exponential '
+              'on the Schur factor; seeds have unit norm, gains are F per unit initial norm',
+    'gain_at_zero': float(np.linalg.norm(adjoint)),
+    'curve_peak_gain': float(gain[peak]),
+    'curve_peak_time_tau_A': float(curve_tau[peak]),
+    'arrays': FLUX_ARRAYS_FILE,
+    'seeds': seed_records,
+  }
+  write_flux(config.output_dir, payload)
   return payload
 
 
